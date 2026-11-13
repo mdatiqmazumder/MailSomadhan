@@ -113,6 +113,9 @@ def process(db, c: Campaign, now: datetime) -> None:
     if not box or not box.active or not box.domain.active:
         c.status, c.waiting_reason = "paused", "The mailbox is disabled"
         return
+    if not box.can_campaign:
+        c.status, c.waiting_reason = "paused", "Campaigns were turned off for this mailbox by an administrator"
+        return
     until = daily_block(db, c, now)
     if until:
         c.next_send_at, c.waiting_reason = until, "Daily sending limit reached; continues automatically"

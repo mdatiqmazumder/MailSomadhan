@@ -37,6 +37,16 @@ def _norm(txt: str) -> str:
     return re.sub(r"\s+", "", txt).lower()
 
 
+def _fresh(existing: list[dict], want: dict, same) -> list[dict]:
+    """Changes that leave exactly one record: the wanted one. Every other record of this kind is
+    deleted first; a record that already matches exactly is kept rather than deleted and re-added."""
+    keep = next((r for r in existing if same(r)), None)
+    changes = [{"op": "delete", "id": r["id"]} for r in existing if r is not keep]
+    if keep is None:
+        changes.append({"op": "create", **want})
+    return changes
+
+
 def plan(domain: str, primary_host: str, selector: str, dkim_public: str, existing: list[dict]) -> list[dict]:
     """Returns one entry per mail record:
     {purpose, status: ok|create|update|replace|kept, summary, current[], selected, changes[]}
@@ -65,6 +75,7 @@ def plan(domain: str, primary_host: str, selector: str, dkim_public: str, existi
         entry.update(status="replace", selected=False,
                      summary="Mail for this domain currently goes to another server. Replacing the MX records sends all new mail to this server instead.",
                      changes=[{"op": "delete", "id": r["id"]} for r in mx] + [{"op": "create", **want["MX"]}])
+    entry["fresh"] = _fresh(mx, want["MX"], lambda r: r["content"].rstrip(".").lower() == host and (r.get("priority") or 10) == 10)
     out.append(entry)
 
     # SPF
@@ -86,6 +97,7 @@ def plan(domain: str, primary_host: str, selector: str, dkim_public: str, existi
                      summary=f"There are {len(spf)} SPF records, which makes SPF fail everywhere. Keep only one that also allows this server.",
                      changes=[{"op": "update", "id": spf[0]["id"], **want["SPF"], "content": merged}]
                      + [{"op": "delete", "id": r["id"]} for r in spf[1:]])
+    entry["fresh"] = _fresh(spf, want["SPF"], lambda r: _norm(r["content"]) == _norm(want["SPF"]["content"]))
     out.append(entry)
 
     # DKIM
@@ -99,6 +111,7 @@ def plan(domain: str, primary_host: str, selector: str, dkim_public: str, existi
     else:
         entry.update(status="update", summary="Replace the outdated DKIM key with the current one.", selected=True,
                      changes=[{"op": "update", "id": dkim[0]["id"], **want["DKIM"]}])
+    entry["fresh"] = _fresh([r for r in dkim if r["content"].lower().startswith("v=dkim1")], want["DKIM"], lambda r: _norm(r["content"]) == _norm(want["DKIM"]["content"]))
     out.append(entry)
 
     # DMARC: an existing policy is the admin's choice and is never changed.
@@ -111,5 +124,11 @@ def plan(domain: str, primary_host: str, selector: str, dkim_public: str, existi
     else:
         entry.update(status="create", summary="Add a DMARC policy (suspicious mail is sent to junk).", selected=True,
                      changes=[{"op": "create", **want["DMARC"]}])
+    entry["fresh"] = _fresh(dmarc, want["DMARC"], lambda r: _norm(r["content"]) == _norm(want["DMARC"]["content"]))
     out.append(entry)
+    for e in out:
+        # "Delete existing and add fresh" is offered when it would change something.
+        e["can_replace"] = bool(e["current"]) and bool(e["fresh"])
+        if not e["can_replace"]:
+            e["fresh"] = []
     return out

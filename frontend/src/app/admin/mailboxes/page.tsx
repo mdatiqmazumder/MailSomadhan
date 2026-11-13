@@ -1,13 +1,14 @@
 "use client";
 
-import { KeyRound, Pencil, Plug, Plus, Send, Trash2 } from "lucide-react";
+import { Forward, KeyRound, Megaphone, Pencil, Plug, Plus, Send, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { api, formatDate, useLoad } from "@/lib/api";
 import { useAdmin } from "@/lib/admin";
 import { QuotaPicker, UNLIMITED, UsageBar, fitsLimit, formatLimit, smallestLimit } from "@/components/Storage";
 import { ConnectionSettings, type Connection } from "@/components/ConnectionSettings";
-import { Avatar, Button, Card, Checkbox, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Toggle, toast, confirmDialog } from "@/components/ui";
+import { AvatarEditor } from "@/components/ProfileCards";
+import { Avatar, Badge, Button, Card, Checkbox, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Toggle, toast, confirmDialog } from "@/components/ui";
 
 type Domain = { id: number; name: string; default_quota_mb: number; storage_limit_mb: number; allocated_mb: number };
 type Mailbox = {
@@ -19,6 +20,10 @@ type Mailbox = {
   used_kb: number | null;
   active: boolean;
   last_login: string | null;
+  can_campaign: boolean;
+  forward_to: string;
+  forward_keep: boolean;
+  avatar_url: string | null;
 };
 
 function randomPassword() {
@@ -103,9 +108,13 @@ export default function MailboxesPage() {
               <tr key={m.id}>
                 <td>
                   <Link href={`/admin/analytics/${encodeURIComponent(m.email)}`} className="flex min-w-0 items-center gap-3 hover:text-accent">
-                    <Avatar name={m.display_name || m.email} size={30} />
+                    <Avatar name={m.display_name || m.email} src={m.avatar_url} size={30} />
                     <span className="min-w-0">
-                      <span className="block truncate font-medium">{m.display_name || m.email.split("@")[0]}</span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="truncate font-medium">{m.display_name || m.email.split("@")[0]}</span>
+                        {m.can_campaign && <span title="Campaigns allowed"><Megaphone className="h-3.5 w-3.5 shrink-0 text-accent" aria-label="Campaigns allowed" /></span>}
+                        {m.forward_to && <span title={`Forwards to ${m.forward_to.split(",").join(", ")}`}><Forward className="h-3.5 w-3.5 shrink-0 text-muted" aria-label="Forwarding on" /></span>}
+                      </span>
                       <span className="block truncate text-xs text-muted">{m.email}</span>
                     </span>
                   </Link>
@@ -183,6 +192,9 @@ function MailboxForm({ domains, mailbox, maxMb, onClose, onSaved }: { domains: D
   const available = !domain || domain.storage_limit_mb === UNLIMITED ? null : domain.storage_limit_mb - domain.allocated_mb + (mailbox ? mailbox.quota_mb : 0);
   const [busy, setBusy] = useState(false);
   const [welcome, setWelcome] = useState(true);
+  const [campaigns, setCampaigns] = useState(mailbox?.can_campaign ?? false);
+  const [forwardTo, setForwardTo] = useState(mailbox?.forward_to ?? "");
+  const [avatar, setAvatar] = useState(mailbox?.avatar_url ?? null);
   const { can } = useAdmin();
   const canEdit = !mailbox || can("mailboxes.edit");
   const canPassword = !mailbox || can("mailboxes.password");
@@ -194,12 +206,16 @@ function MailboxForm({ domains, mailbox, maxMb, onClose, onSaved }: { domains: D
       if (mailbox) {
         await api(`/admin/mailboxes/${mailbox.id}`, {
           method: "PATCH",
-          json: { ...(canEdit ? { display_name: displayName, quota_mb: quota } : {}), ...(password ? { password } : {}) },
+          json: {
+            ...(canEdit ? { display_name: displayName, quota_mb: quota, can_campaign: campaigns } : {}),
+            ...(canEdit && forwardTo !== mailbox.forward_to ? { forward_to: forwardTo } : {}),
+            ...(password ? { password } : {}),
+          },
         });
         toast.ok("Mailbox updated");
       } else {
         const created = await api<{ email: string; welcome_sent: boolean }>("/admin/mailboxes", {
-          json: { domain_id: Number(domainId), local_part: local, password, display_name: displayName, quota_mb: quota, send_welcome: welcome },
+          json: { domain_id: Number(domainId), local_part: local, password, display_name: displayName, quota_mb: quota, send_welcome: welcome, can_campaign: campaigns },
         });
         if (welcome && !created.welcome_sent) toast.error(`${created.email} created, but the welcome email could not be delivered`);
         else toast.ok(welcome ? `${created.email} created; welcome email delivered` : `${created.email} created`);
@@ -214,6 +230,14 @@ function MailboxForm({ domains, mailbox, maxMb, onClose, onSaved }: { domains: D
   return (
     <Modal title={mailbox ? `Edit ${mailbox.email}` : "Add mailbox"} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
+        {mailbox && canEdit && (
+          <AvatarEditor
+            name={mailbox.display_name || mailbox.email}
+            url={avatar}
+            endpoint={`/admin/mailboxes/${mailbox.id}/avatar`}
+            onChange={setAvatar}
+          />
+        )}
         {!mailbox && (
           <Field label="Address">
             <div className="flex items-center gap-1.5">
@@ -241,6 +265,28 @@ function MailboxForm({ domains, mailbox, maxMb, onClose, onSaved }: { domains: D
         {canEdit && <Field label="Storage">
           <QuotaPicker valueMb={quota} onChange={setQuota} maxMb={maxMb} availableMb={available} domainName={domain?.name} limitMb={domain?.storage_limit_mb} />
         </Field>}
+        {canEdit && (
+          <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+            <Checkbox className="mt-0.5" checked={campaigns} onChange={setCampaigns} label="Allow campaigns" />
+            <span>
+              Allow campaigns
+              <span className="block text-[13px] text-muted">This user can send campaigns (one message to many recipients) from webmail. Turning it off pauses their running campaigns.</span>
+            </span>
+          </label>
+        )}
+        {mailbox && canEdit && (
+          <Field
+            label="Forwarding"
+            hint={mailbox.forward_to
+              ? `Set by the user${mailbox.forward_keep ? ", keeping a copy here" : "; no copy is kept here"}. Clear the field to turn it off.`
+              : "Off. Users can set it themselves under Account settings; you can also enter addresses here."}
+          >
+            <div className="flex gap-2">
+              <Input value={forwardTo} onChange={(e) => setForwardTo(e.target.value)} placeholder="Not forwarded" />
+              {forwardTo && <Button onClick={() => setForwardTo("")}>Clear</Button>}
+            </div>
+          </Field>
+        )}
         {!mailbox && (
           <label className="flex cursor-pointer items-start gap-2.5 text-sm">
             <Checkbox className="mt-0.5" checked={welcome} onChange={setWelcome} label="Send a welcome email" />

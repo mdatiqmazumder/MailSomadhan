@@ -18,16 +18,26 @@ COLUMNS = [
     ("admins", "totp_enabled", "BOOLEAN NOT NULL DEFAULT false"),
     ("admins", "last_login", "TIMESTAMP WITH TIME ZONE"),
     ("mailboxes", "token_version", "INTEGER NOT NULL DEFAULT 0"),
+    # 1.6: campaign permission per mailbox, forwarding, profile picture
+    ("mailboxes", "can_campaign", "BOOLEAN NOT NULL DEFAULT false"),
+    ("mailboxes", "forward_to", "TEXT NOT NULL DEFAULT ''"),
+    ("mailboxes", "forward_keep", "BOOLEAN NOT NULL DEFAULT true"),
+    ("mailboxes", "avatar_version", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
 def migrate() -> None:
     insp = inspect(engine)
     tables = set(insp.get_table_names())
+    added = set()
     with engine.begin() as conn:
         for table, column, ddl in COLUMNS:
             if table in tables and column not in {c["name"] for c in insp.get_columns(table)}:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+                added.add((table, column))
+        # Campaigns became a per-mailbox permission: mailboxes that already ran campaigns keep it.
+        if ("mailboxes", "can_campaign") in added and "campaigns" in tables:
+            conn.execute(text("UPDATE mailboxes SET can_campaign = :t WHERE id IN (SELECT mailbox_id FROM campaigns)"), {"t": True})
         # Repair: there must always be an active super administrator. Installs of 1.5.0 created
         # the first account with the limited role, which locked everyone out of the console.
         if "admins" in tables:

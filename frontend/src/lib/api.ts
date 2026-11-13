@@ -105,6 +105,8 @@ export type Me =
       kind: "user";
       email: string;
       display_name: string;
+      avatar_url: string | null;
+      can_campaign: boolean;
       signature_html: string;
       brand_name: string;
       max_attachment_mb: number;

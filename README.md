@@ -32,11 +32,11 @@ curl -fsSL https://raw.githubusercontent.com/mdatiqmazumder/MailSomadhan/main/in
 | User analytics | Per-user sent/received, external recipients, bounce rate, spam-flagged mail, volume; drill-down with activity heatmap and top recipients |
 | Message log | Every message with filters (direction, status, domain, sender, recipient, spam, attachments) and full delivery details |
 | Reports | CSV exports (traffic, users, sender domains, full log) and a printable PDF management report |
-| Campaigns | Oversee users' individual sending, approve large campaigns, set daily and per-domain limits, manage the do-not-send list |
+| Campaigns | Choose which mailboxes may send campaigns, oversee users' individual sending, approve large campaigns, set daily and per-domain limits, manage the do-not-send list |
 | Mail filters | Block or trust senders and domains, block IP ranges and attachment types |
 | Backups | Encrypted, scheduled backups to Google Drive (see [docs/BACKUP.md](docs/BACKUP.md)) |
-| Domains | Add any number of domains; shows the MX, SPF, DKIM and DMARC records to publish and checks them live, or creates them automatically on Cloudflare after a one-time connection; DKIM key rotation; a storage pool shared by its mailboxes |
-| Mailboxes | Create users, set each mailbox's storage (a size in GB or unlimited; never above the server maximum or the domain's pool), see real usage, reset passwords, disable accounts |
+| Domains | Add any number of domains; shows the MX, SPF, DKIM and DMARC records to publish and checks them live, or creates them automatically on Cloudflare after a one-time connection (optionally deleting old records of the same kind and adding fresh ones); DKIM key rotation; a storage pool shared by its mailboxes |
+| Mailboxes | Create users, set each mailbox's storage (a size in GB or unlimited; never above the server maximum or the domain's pool), see real usage, reset passwords, disable accounts, set profile pictures, see and clear forwarding |
 | Aliases | Forwarding addresses, and a catch-all per domain for mail to unknown addresses |
 | Hosts & TLS | Extra hostnames for the panel, SMTP and IMAP, each with its own Let's Encrypt certificate (SNI) |
 | SMTP relays | Send through external SMTP services; one relay per domain or a default for all |
@@ -49,9 +49,9 @@ curl -fsSL https://raw.githubusercontent.com/mdatiqmazumder/MailSomadhan/main/in
 
 **Users** (sign in with their email address)
 
-Webmail with folders, search, rich-text editor, attachments (drag and drop), reply/forward, drafts, spam and archive handling, signature and password settings.
+Webmail with folders, search, rich-text editor, attachments (drag and drop), reply/forward, drafts, spam and archive handling, profile picture, forwarding to another address (with or without a copy), signature and password settings.
 
-**Campaigns** (webmail → Campaigns): send one message to many recipients, each as a separate personal email (nobody sees the other addresses). Recipients from a pasted list or CSV, merge fields such as `{{first_name|there}}`, attachments, and pacing: all at once, one every N minutes, or a random pause within a range. Every campaign respects the administrator's daily limit per user and hourly limit per recipient domain, includes a one-click unsubscribe link (RFC 8058) by default, skips people who unsubscribed or bounced, and shows per-recipient delivery status. Any IMAP/SMTP mail app works too: IMAP 993 (SSL), SMTP 465 (SSL) or 587 (STARTTLS).
+**Campaigns** (webmail → Campaigns, for mailboxes an administrator allowed): send one message to many recipients, each as a separate personal email (nobody sees the other addresses). Recipients from a pasted list or CSV, merge fields such as `{{first_name|there}}`, attachments, and pacing: all at once, one every N minutes, or a random pause within a range. Every campaign respects the administrator's daily limit per user and hourly limit per recipient domain, includes a one-click unsubscribe link (RFC 8058) by default, skips people who unsubscribed or bounced, and shows per-recipient delivery status. Any IMAP/SMTP mail app works too: IMAP 993 (SSL), SMTP 465 (SSL) or 587 (STARTTLS).
 
 ## Managing the server
 

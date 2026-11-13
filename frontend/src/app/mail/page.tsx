@@ -11,7 +11,7 @@ import { api, formatBytes, formatDate, logout, useMe } from "@/lib/api";
 import Composer from "@/components/mail/Composer";
 import MessageBody from "@/components/mail/MessageBody";
 import { addrFull, addrLabel, escapeHtml, textToHtml, type Draft, type Folder, type ListItem, type Message } from "@/components/mail/types";
-import { Button, IconButton, Spinner, cx, toast, confirmDialog } from "@/components/ui";
+import { Avatar, Button, IconButton, Spinner, cx, toast, confirmDialog } from "@/components/ui";
 
 const PAGE_SIZE = 40;
 const ROLE_ICONS: Record<string, typeof Inbox> = {
@@ -333,10 +333,14 @@ export default function MailPage() {
           <button onClick={newFolder} className="mt-1 flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-muted hover:bg-hover hover:text-text">
             <FolderPlus className="h-4 w-4" /> New folder
           </button>
-          <div className="my-2 border-t border-border" />
-          <Link href="/mail/campaigns" className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm hover:bg-hover">
-            <Send className="h-4 w-4" /> Campaigns
-          </Link>
+          {me.can_campaign && (
+            <>
+              <div className="my-2 border-t border-border" />
+              <Link href="/mail/campaigns" className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm hover:bg-hover">
+                <Send className="h-4 w-4" /> Campaigns
+              </Link>
+            </>
+          )}
         </nav>
         <div className="border-t border-border p-3">
           {quotaPct !== null && quota && (
@@ -349,8 +353,13 @@ export default function MailPage() {
               </p>
             </div>
           )}
-          <p className="truncate text-[13px] font-medium" title={me.email}>{me.display_name || me.email}</p>
-          {me.display_name && <p className="truncate text-xs text-muted">{me.email}</p>}
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Avatar name={me.display_name || me.email} src={me.avatar_url} size={34} />
+            <div className="min-w-0">
+              <p className="truncate text-[13px] font-medium" title={me.email}>{me.display_name || me.email}</p>
+              {me.display_name && <p className="truncate text-xs text-muted">{me.email}</p>}
+            </div>
+          </div>
           <div className="mt-2 flex gap-1">
             <Link href="/account" className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border text-[13px] hover:bg-hover">
               <Settings className="h-3.5 w-3.5" /> Settings

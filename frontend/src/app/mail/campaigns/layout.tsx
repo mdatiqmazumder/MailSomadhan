@@ -25,12 +25,20 @@ export default function CampaignsLayout({ children }: { children: React.ReactNod
         <span className="flex-1" />
         <ThemeToggle />
         <span className="flex items-center gap-2 text-sm">
-          <Avatar name={me.display_name || me.email} size={28} />
+          <Avatar name={me.display_name || me.email} src={me.avatar_url} size={28} />
           <span className="hidden sm:inline">{me.email}</span>
         </span>
       </header>
       <main className="px-4 py-6 lg:px-8 lg:py-8">
-        <div className="mx-auto max-w-[1100px]">{children}</div>
+        <div className="mx-auto max-w-[1100px]">
+          {me.can_campaign ? children : (
+            <div className="mx-auto max-w-lg rounded-xl border border-border bg-surface p-6 text-center">
+              <Send className="mx-auto mb-3 h-6 w-6 text-muted" />
+              <h1 className="font-semibold">Campaigns are not enabled for your mailbox</h1>
+              <p className="mt-1 text-sm text-muted">Ask your administrator to allow campaigns for {me.email}.</p>
+            </div>
+          )}
+        </div>
       </main>
     </div>
   );

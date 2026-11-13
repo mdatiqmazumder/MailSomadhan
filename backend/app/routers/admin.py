@@ -3,7 +3,7 @@ import re
 import smtplib
 import ssl
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -14,6 +14,7 @@ from ..models import Admin, Alias, Domain, Host, Mailbox, Relay, Setting
 from ..quota import UNLIMITED, allocated_mb, check_mailbox_quota, fits, gb, max_mailbox_mb, smallest, usage_kb
 from .cloudflare import publish_dkim
 from ..connection import connection_info, deliver_welcome
+from .profile import avatar_url, clean_forwards, read_upload, remove_avatar, save_avatar
 from ..security import DOMAIN_RE, EMAIL_RE, LOCAL_RE, check_password_rules, hash_password
 from ..system import (DEFAULT_SETTINGS, disk_usage, dns_records, generate_dkim, get_setting,
                       get_settings_map, mail_queue, remove_dkim, run_helper, service_status,
@@ -194,6 +195,7 @@ class MailboxIn(BaseModel):
     display_name: str = Field(default="", max_length=200)
     quota_mb: int | None = Field(default=None, ge=0, le=1024 * 1024)  # 0 = unlimited
     send_welcome: bool = True
+    can_campaign: bool = False
 
 
 class MailboxPatch(BaseModel):
@@ -201,12 +203,17 @@ class MailboxPatch(BaseModel):
     display_name: str | None = Field(default=None, max_length=200)
     quota_mb: int | None = Field(default=None, ge=0, le=1024 * 1024)  # 0 = unlimited
     active: bool | None = None
+    can_campaign: bool | None = None
+    forward_to: str | None = Field(default=None, max_length=2000)  # administrators can change or clear it
+    forward_keep: bool | None = None
 
 
 def _mailbox_out(m: Mailbox, usage: dict[str, int] | None = None) -> dict:
     return {
         "id": m.id, "email": m.email, "domain_id": m.domain_id, "display_name": m.display_name,
         "quota_mb": m.quota_mb, "active": m.active, "used_kb": (usage or {}).get(m.email),
+        "can_campaign": m.can_campaign, "forward_to": m.forward_to, "forward_keep": m.forward_keep,
+        "avatar_url": avatar_url(m),
         "last_login": m.last_login.isoformat() if m.last_login else None,
         "created_at": m.created_at.isoformat(),
     }
@@ -246,7 +253,7 @@ def create_mailbox(body: MailboxIn, db: Session = Depends(get_db), ctx: AdminCtx
     mbox = Mailbox(
         domain_id=domain.id, local_part=local, email=email,
         password_hash=hash_password(body.password), display_name=body.display_name.strip(),
-        quota_mb=quota,
+        quota_mb=quota, can_campaign=body.can_campaign,
     )
     db.add(mbox)
     db.commit()
@@ -261,6 +268,27 @@ def mailbox_connection(mailbox_id: int, db: Session = Depends(get_db), ctx: Admi
     if not mbox or not ctx.can_domain(mbox.domain_id):
         raise HTTPException(404, "Mailbox not found")
     return connection_info(db, mbox)
+
+
+@scoped.put("/mailboxes/{mailbox_id}/avatar")
+async def admin_upload_avatar(mailbox_id: int, file: UploadFile = File(...), db: Session = Depends(get_db),
+                              ctx: AdminCtx = Depends(require_perm("mailboxes.edit"))):
+    mbox = db.get(Mailbox, mailbox_id)
+    if not mbox or not ctx.can_domain(mbox.domain_id):
+        raise HTTPException(404, "Mailbox not found")
+    save_avatar(mbox, await read_upload(file))
+    db.commit()
+    return _mailbox_out(mbox)
+
+
+@scoped.delete("/mailboxes/{mailbox_id}/avatar")
+def admin_delete_avatar(mailbox_id: int, db: Session = Depends(get_db), ctx: AdminCtx = Depends(require_perm("mailboxes.edit"))):
+    mbox = db.get(Mailbox, mailbox_id)
+    if not mbox or not ctx.can_domain(mbox.domain_id):
+        raise HTTPException(404, "Mailbox not found")
+    remove_avatar(mbox)
+    db.commit()
+    return _mailbox_out(mbox)
 
 
 @scoped.post("/mailboxes/{mailbox_id}/welcome")
@@ -284,7 +312,8 @@ def update_mailbox(mailbox_id: int, body: MailboxPatch, db: Session = Depends(ge
         raise HTTPException(404, "Mailbox not found")
     if body.password and not ctx.can("mailboxes.password"):
         raise HTTPException(403, "You may not reset passwords")
-    if (body.display_name is not None or body.quota_mb is not None or body.active is not None) and not ctx.can("mailboxes.edit"):
+    edits = (body.display_name, body.quota_mb, body.active, body.can_campaign, body.forward_to, body.forward_keep)
+    if any(v is not None for v in edits) and not ctx.can("mailboxes.edit"):
         raise HTTPException(403, "You may only reset passwords")
     if body.password:
         problem = check_password_rules(body.password)
@@ -301,6 +330,12 @@ def update_mailbox(mailbox_id: int, body: MailboxPatch, db: Session = Depends(ge
         mbox.active = body.active
         if not body.active:
             mbox.token_version += 1
+    if body.can_campaign is not None:
+        mbox.can_campaign = body.can_campaign
+    if body.forward_to is not None:
+        mbox.forward_to = clean_forwards(body.forward_to, mbox.email)
+    if body.forward_keep is not None:
+        mbox.forward_keep = body.forward_keep
     db.commit()
     return _mailbox_out(mbox)
 
@@ -311,6 +346,7 @@ def delete_mailbox(mailbox_id: int, db: Session = Depends(get_db), ctx: AdminCtx
     if not mbox or not ctx.can_domain(mbox.domain_id):
         raise HTTPException(404, "Mailbox not found")
     email = mbox.email
+    remove_avatar(mbox)
     db.delete(mbox)
     db.commit()
     run_helper("purge-mailbox", email)

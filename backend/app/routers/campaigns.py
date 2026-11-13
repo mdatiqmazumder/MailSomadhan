@@ -117,6 +117,12 @@ class PreviewIn(BaseModel):
     recipients: list[RecipientIn] = Field(default=[], max_length=10_000)
 
 
+def require_campaigns(user: Mailbox = Depends(require_user)) -> Mailbox:
+    if not user.can_campaign:
+        raise HTTPException(403, "Campaigns are not enabled for your mailbox. Ask your administrator.")
+    return user
+
+
 @user_router.get("/campaigns/limits")
 def get_limits(user: Mailbox = Depends(require_user), db: Session = Depends(get_db)):
     return limits(db, user.id)
@@ -143,7 +149,7 @@ def check_recipients(db: Session, user: Mailbox, recipients: list[RecipientIn]) 
 
 
 @user_router.post("/campaigns/preview")
-def preview(body: PreviewIn, user: Mailbox = Depends(require_user), db: Session = Depends(get_db)):
+def preview(body: PreviewIn, user: Mailbox = Depends(require_campaigns), db: Session = Depends(get_db)):
     valid, invalid, duplicates, suppressed = check_recipients(db, user, body.recipients)
     sample = valid[0] if valid else RecipientIn(email="recipient@example.com", fields={"name": "Sample Recipient", "company": "Example Ltd"})
     fields = recipient_fields(sample.email, sample.fields)
@@ -163,7 +169,7 @@ def preview(body: PreviewIn, user: Mailbox = Depends(require_user), db: Session 
 
 @user_router.post("/campaigns")
 async def create_campaign(data: str = Form(...), files: list[UploadFile] = File(default=[]),
-                          user: Mailbox = Depends(require_user), db: Session = Depends(get_db)):
+                          user: Mailbox = Depends(require_campaigns), db: Session = Depends(get_db)):
     try:
         raw = json.loads(data)
     except ValueError as exc:
@@ -278,6 +284,8 @@ def campaign_action(campaign_id: int, action: str, user: Mailbox = Depends(requi
     if action not in ("pause", "resume", "cancel"):
         raise HTTPException(404, "Unknown action")
     c = own(db, user, campaign_id)
+    if action == "resume" and not user.can_campaign:
+        raise HTTPException(403, "Campaigns are not enabled for your mailbox. Ask your administrator.")
     change_state(db, c, action)
     return campaign_out(c, counts(db, [c.id])[c.id])
 

@@ -108,6 +108,12 @@ class Mailbox(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     signature_html: Mapped[str] = mapped_column(Text, default="")
     token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Campaigns are off unless an administrator allows them for this mailbox.
+    can_campaign: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Comma separated addresses incoming mail is forwarded to ('' = off); forward_keep keeps a copy here.
+    forward_to: Mapped[str] = mapped_column(Text, default="", server_default="")
+    forward_keep: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    avatar_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # 0 = no picture
     last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 

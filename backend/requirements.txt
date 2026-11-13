@@ -10,3 +10,4 @@ cryptography>=42
 dnspython>=2.6
 nh3>=0.2.17
 pyotp>=2.9
+pillow>=10.3

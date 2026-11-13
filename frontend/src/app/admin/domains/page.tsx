@@ -23,7 +23,7 @@ type Domain = {
   catch_all: string | null;
 };
 type Relay = { id: number; name: string };
-type DnsRecord = { purpose: string; type: string; host: string; value: string; ok?: boolean; found?: string[] };
+type DnsRecord = { purpose: string; type: string; host: string; value: string; ok?: boolean; found?: string[]; note?: string };
 type PlanEntry = {
   purpose: string;
   status: "ok" | "create" | "update" | "replace" | "kept";
@@ -32,6 +32,8 @@ type PlanEntry = {
   selected: boolean;
   record: { type: string; name: string; content: string };
   changes: unknown[];
+  fresh: { op: string }[];
+  can_replace: boolean;
 };
 type Plan = { zone: string; records: PlanEntry[]; done?: string[] };
 
@@ -204,7 +206,7 @@ function DnsModal({ domain, onClose }: { domain: Domain; onClose: () => void }) 
     <Modal title={`DNS records for ${domain.name}`} onClose={onClose} wide>
       {isSuperAdmin && <CloudflareSetup domain={domain} onApplied={recheck} />}
       <p className="mb-4 text-sm text-muted">
-        Create these records at your DNS provider so other mail servers accept and trust mail from this domain. Changes can take a while to propagate.
+        Create these records at your DNS provider so other mail servers accept and trust mail from this domain. The check asks the domain&apos;s own nameservers, so a new record shows up within seconds; other mail servers may still see the old answer for a while.
       </p>
       {loading ? (
         <Spinner />
@@ -224,6 +226,10 @@ function DnsModal({ domain, onClose }: { domain: Domain; onClose: () => void }) 
               </div>
               <Row label="Name" value={r.host} />
               <Row label="Value" value={r.value} />
+              {r.note && <p className="mt-1.5 text-xs text-warn">{r.note}</p>}
+              {r.ok === false && !r.note && r.found && r.found.length > 0 && (
+                <p className="mt-1.5 text-xs text-muted break-all">Found now: {r.found.join(" · ")}</p>
+              )}
             </div>
           ))}
         </div>
@@ -257,6 +263,7 @@ function CloudflareSetup({ domain, onApplied }: { domain: Domain; onApplied: () 
   const [plan, setPlan] = useState<Plan | null>(null);
   const [planError, setPlanError] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [fresh, setFresh] = useState<Set<string>>(new Set());
   const [loadingPlan, setLoadingPlan] = useState(false);
   const [applying, setApplying] = useState(false);
 
@@ -271,6 +278,7 @@ function CloudflareSetup({ domain, onApplied }: { domain: Domain; onApplied: () 
       const p = await api<Plan>(`/admin/domains/${domain.id}/cloudflare`);
       setPlan(p);
       setPicked(new Set(p.records.filter((r) => r.selected).map((r) => r.purpose)));
+      setFresh(new Set());
     } catch (err) {
       setPlan(null);
       setPlanError((err as Error).message);
@@ -284,11 +292,17 @@ function CloudflareSetup({ domain, onApplied }: { domain: Domain; onApplied: () 
   }, [cf?.configured, loadPlan]);
 
   async function apply() {
+    const replacing = [...fresh].filter((p) => picked.has(p));
+    if (replacing.length && !(await confirmDialog({
+      title: `Delete the existing ${replacing.join(", ")} records on Cloudflare and add fresh ones? Anything the old records allowed or pointed to (for example another mail service) stops working.`,
+      danger: true,
+    }))) return;
     setApplying(true);
     try {
-      const p = await api<Plan>(`/admin/domains/${domain.id}/cloudflare`, { json: { purposes: [...picked] } });
+      const p = await api<Plan>(`/admin/domains/${domain.id}/cloudflare`, { json: { purposes: [...picked], fresh: replacing } });
       setPlan(p);
       setPicked(new Set(p.records.filter((r) => r.selected).map((r) => r.purpose)));
+      setFresh(new Set());
       toast.ok(p.done?.length ? `Cloudflare updated (${p.done.length} change${p.done.length === 1 ? "" : "s"})` : "Nothing to change");
       setTimeout(onApplied, 1500);
     } catch (err) {
@@ -318,7 +332,9 @@ function CloudflareSetup({ domain, onApplied }: { domain: Domain; onApplied: () 
     );
   }
 
-  const pending = plan?.records.filter((r) => r.changes.length > 0) ?? [];
+  const pending = plan?.records.filter((r) => r.changes.length > 0 || r.can_replace) ?? [];
+  const toggle = (set: (f: (s: Set<string>) => Set<string>) => void, key: string, on: boolean) =>
+    set((s) => { const n = new Set(s); if (on) n.add(key); else n.delete(key); return n; });
   return (
     <div className="mb-4 rounded-lg border border-border p-3">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -339,8 +355,9 @@ function CloudflareSetup({ domain, onApplied }: { domain: Domain; onApplied: () 
         <>
           <ul className="divide-y divide-border">
             {plan.records.map((r) => {
-              const badge = PLAN_BADGE[r.status];
-              const selectable = r.changes.length > 0;
+              const replacing = fresh.has(r.purpose) && picked.has(r.purpose);
+              const badge = replacing ? { tone: "warn" as const, label: "Will be replaced" } : PLAN_BADGE[r.status];
+              const selectable = r.changes.length > 0 || r.can_replace;
               return (
                 <li key={r.purpose} className="flex items-start gap-3 py-2 text-sm">
                   {selectable ? (
@@ -348,7 +365,7 @@ function CloudflareSetup({ domain, onApplied }: { domain: Domain; onApplied: () 
                       className="mt-0.5"
                       label={`Apply ${r.purpose}`}
                       checked={picked.has(r.purpose)}
-                      onChange={(v) => setPicked((s) => { const n = new Set(s); if (v) n.add(r.purpose); else n.delete(r.purpose); return n; })}
+                      onChange={(v) => { toggle(setPicked, r.purpose, v); if (!v) toggle(setFresh, r.purpose, false); }}
                     />
                   ) : (
                     <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-ok" />
@@ -362,8 +379,18 @@ function CloudflareSetup({ domain, onApplied }: { domain: Domain; onApplied: () 
                     {r.status !== "ok" && r.status !== "kept" && r.current.length > 0 && r.purpose !== "DKIM" && (
                       <p className="mt-1 text-xs text-muted break-all">Now: {r.current.join(" · ")}</p>
                     )}
-                    {(r.status === "update" || r.status === "replace") && r.purpose !== "DKIM" && (
-                      <p className="mt-0.5 text-xs text-muted break-all">New: {r.record.content}</p>
+                    {(replacing || r.status === "update" || r.status === "replace") && r.purpose !== "DKIM" && (
+                      <p className="mt-0.5 text-xs text-muted break-all">New: {replacing ? (r.purpose === "MX" ? `10 ${r.record.content}` : desiredContent(r)) : r.record.content}</p>
+                    )}
+                    {r.can_replace && (
+                      <label className="mt-1.5 flex w-fit cursor-pointer items-center gap-2 text-xs">
+                        <Checkbox
+                          label={`Delete existing ${r.purpose} records and add a fresh one`}
+                          checked={replacing}
+                          onChange={(v) => { toggle(setFresh, r.purpose, v); if (v) toggle(setPicked, r.purpose, true); }}
+                        />
+                        <span>Delete the existing {r.purpose} record{r.current.length === 1 ? "" : "s"} and add a fresh one</span>
+                      </label>
                     )}
                   </div>
                 </li>
@@ -383,6 +410,12 @@ function CloudflareSetup({ domain, onApplied }: { domain: Domain; onApplied: () 
       )}
     </div>
   );
+}
+
+/** The record a fresh replacement creates (the plan's `record` may hold a merged value instead). */
+function desiredContent(r: PlanEntry): string {
+  const created = r.fresh.find((c) => c.op === "create") as { content?: string } | undefined;
+  return created?.content ?? r.record.content;
 }
 
 function Row({ label, value }: { label: string; value: string }) {

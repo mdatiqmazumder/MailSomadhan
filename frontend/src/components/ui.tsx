@@ -324,7 +324,11 @@ export function Notice({ tone = "warn", title, children }: { tone?: "warn" | "da
   );
 }
 
-export function Avatar({ name, size = 32 }: { name: string; size?: number }) {
+export function Avatar({ name, size = 32, src }: { name: string; size?: number; src?: string | null }) {
+  if (src) {
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={src} alt="" aria-hidden width={size} height={size} className="shrink-0 rounded-full object-cover" style={{ width: size, height: size }} />;
+  }
   const letters = (name.match(/\b[\p{L}\d]/gu) || ["?"]).slice(0, 2).join("").toUpperCase();
   let hash = 0;
   for (const ch of name) hash = (hash * 31 + ch.charCodeAt(0)) | 0;

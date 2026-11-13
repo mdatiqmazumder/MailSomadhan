@@ -145,15 +145,19 @@ def get_plan(domain_id: int, db: Session = Depends(get_db)):
 
 class ApplyIn(BaseModel):
     purposes: list[str] = Field(min_length=1, max_length=4)
+    # Purposes whose existing records are all deleted and replaced by one fresh record.
+    fresh: list[str] = Field(default_factory=list, max_length=4)
 
 
 @router.post("/domains/{domain_id}/cloudflare")
 def apply_plan(domain_id: int, body: ApplyIn, db: Session = Depends(get_db)):
     domain = _domain(db, domain_id)
     wanted = {p for p in body.purposes if p in PURPOSES}
+    fresh = {p for p in body.fresh if p in wanted}
     # Recompute from the live zone so a stale page can never apply outdated changes.
     current = domain_plan(db, domain)
-    changes = [c for e in current["records"] if e["purpose"] in wanted for c in e["changes"]]
+    changes = [c for e in current["records"] if e["purpose"] in wanted
+               for c in (e["fresh"] if e["purpose"] in fresh and e.get("can_replace") else e["changes"])]
     if not changes:
         return {"done": [], **current}
     result = _apply(domain, changes)

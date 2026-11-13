@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, useLoad, useMe, type Me } from "@/lib/api";
 import { ConnectionSettings, type Connection } from "@/components/ConnectionSettings";
 import { PasswordCard } from "@/components/PasswordCard";
+import { AvatarEditor, ForwardingCard } from "@/components/ProfileCards";
 import { Button, Card, Field, Input, Spinner, toast } from "@/components/ui";
 
 const RichEditor = dynamic(() => import("@/components/RichEditor"), { ssr: false });
@@ -60,6 +61,14 @@ export default function AccountPage() {
       <div className="grid gap-5 lg:grid-cols-[3fr_2fr]">
         <Card className="p-5">
           <h2 className="mb-4 font-semibold">Profile</h2>
+          <div className="mb-5">
+            <AvatarEditor
+              name={me.display_name || me.email}
+              url={me.avatar_url}
+              endpoint="/account/avatar"
+              onChange={(url) => setMe({ ...me, avatar_url: url })}
+            />
+          </div>
           <form onSubmit={save} className="space-y-4">
             <Field label="Display name" hint="Recipients see this name next to your address.">
               <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={200} />
@@ -75,6 +84,7 @@ export default function AccountPage() {
         </Card>
         <div className="space-y-5">
           <PasswordCard />
+          <ForwardingCard email={me.email} />
         </div>
       </div>
 

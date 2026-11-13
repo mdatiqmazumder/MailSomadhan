@@ -8,6 +8,9 @@ import time
 from datetime import timezone
 from pathlib import Path
 
+import dns.message
+import dns.query
+import dns.rdatatype
 import dns.resolver
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -203,16 +206,53 @@ def mail_queue() -> list[dict]:
 
 
 # ---------- DNS ----------
+def _format(rtype: str, rdatas) -> list[str]:
+    if rtype == "TXT":
+        return ["".join(part.decode(errors="replace") for part in r.strings) for r in rdatas]
+    if rtype == "MX":
+        return [str(r.exchange).rstrip(".").lower() for r in rdatas]
+    return [str(r) for r in rdatas]
+
+
+def _authoritative(name: str, rtype: str) -> list[str] | None:
+    """Ask the domain's own nameservers. A caching resolver can keep an old answer for up to the
+    zone's TTL (often 30 minutes after a record set changed), so a record just added at the DNS
+    provider would show as missing. Returns None when no nameserver could be asked."""
+    resolver = dns.resolver.Resolver()
+    resolver.lifetime = 4
+    try:
+        zone = dns.resolver.zone_for_name(name, resolver=resolver)
+        servers = [str(r.target) for r in resolver.resolve(zone, "NS")]
+    except Exception:  # noqa: BLE001
+        return None
+    query = dns.message.make_query(name, rtype)
+    for ns in servers[:4]:
+        try:
+            ips = [str(a) for a in resolver.resolve(ns, "A")][:2]
+        except Exception:  # noqa: BLE001
+            continue
+        for ip in ips:
+            try:
+                answer, _ = dns.query.udp_with_fallback(query, ip, timeout=3)
+            except Exception:  # noqa: BLE001
+                continue
+            if answer.rcode() not in (0, 3):  # NOERROR / NXDOMAIN are real answers
+                continue
+            wanted = dns.rdatatype.from_text(rtype)
+            rdatas = [rd for rrset in answer.answer if rrset.rdtype == wanted
+                      and rrset.name.to_text().rstrip(".").lower() == name.lower().rstrip(".") for rd in rrset]
+            return _format(rtype, rdatas)
+    return None
+
+
 def _resolve(name: str, rtype: str) -> list[str]:
+    fresh = _authoritative(name, rtype)
+    if fresh is not None:
+        return fresh
     try:
         resolver = dns.resolver.Resolver()
         resolver.lifetime = 4
-        answers = resolver.resolve(name, rtype)
-        if rtype == "TXT":
-            return ["".join(part.decode() for part in r.strings) for r in answers]
-        if rtype == "MX":
-            return [str(r.exchange).rstrip(".").lower() for r in answers]
-        return [str(r) for r in answers]
+        return _format(rtype, resolver.resolve(name, rtype))
     except Exception:  # noqa: BLE001
         return []
 
@@ -234,8 +274,13 @@ def dns_records(domain: Domain, primary_host: str, check: bool = True) -> list[d
             found = _resolve(name, "MX")
             rec["ok"] = primary_host.lower() in found
         elif rec["purpose"] == "SPF":
+            from .dnsplan import spf_allows
             found = [t for t in _resolve(name, "TXT") if t.lower().startswith("v=spf1")]
-            rec["ok"] = any(primary_host.lower() in t.lower() or " mx" in t.lower() for t in found)
+            rec["ok"] = len(found) == 1 and spf_allows(found[0], primary_host)
+            if len(found) > 1:
+                rec["note"] = f"{len(found)} SPF records exist; receivers treat that as an error. Keep only one."
+            elif found and not rec["ok"]:
+                rec["note"] = "An SPF record exists but does not allow this server."
         elif rec["purpose"] == "DKIM":
             found = _resolve(rec["host"], "TXT")
             rec["ok"] = any(domain.dkim_public[:60] in t.replace(" ", "") for t in found)

@@ -155,8 +155,11 @@ def apply(token: str, zone: dict, domain: str, selector: str, changes: list) -> 
             if not ID_RE.match(str(c.get("id", ""))) or c["id"] not in existing:
                 die("unknown record")
             cur = existing[c["id"]]
-            if op == "delete" and not (cur["type"] == "MX" or cur["content"].lower().startswith("v=spf1")):
-                die("only MX and SPF records can be removed")
+            # lookup() only returns MX and TXT records at the apex, _dmarc and the DKIM name; of the TXT
+            # records only the mail ones (SPF, DKIM, DMARC) may be removed, never a site verification.
+            prefix = {n["apex"]: "v=spf1", n["dmarc"]: "v=dmarc1", n["dkim"]: "v=dkim1"}.get(cur["name"])
+            if op == "delete" and not (cur["type"] == "MX" or (prefix and cur["content"].lower().startswith(prefix))):
+                die("only MX, SPF, DKIM and DMARC records can be removed")
             if op == "update" and cur["type"] != c.get("type"):
                 die("a record cannot change its type")
         elif op != "create":

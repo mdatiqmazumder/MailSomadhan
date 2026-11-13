@@ -69,8 +69,10 @@ def _me(p: Principal, db: Session) -> dict:
             "max_mailbox_mb": max_mailbox_mb(db),
         }
     m = p.mailbox
+    from .profile import avatar_url
     return {
         "kind": "user", "email": m.email, "display_name": m.display_name,
+        "avatar_url": avatar_url(m), "can_campaign": m.can_campaign,
         "signature_html": m.signature_html, "brand_name": brand,
         "max_attachment_mb": int(get_setting(db, "max_attachment_mb") or 25),
     }
