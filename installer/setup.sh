@@ -133,7 +133,47 @@ else
   ADMIN_PASS=""
 fi
 
-HTTP_PORT="${HTTP_PORT:-80}"
+HTTP_PORT="${MAILSOMADHAN_HTTP_PORT:-${HTTP_PORT:-80}}"
+WEB_PORT="${MAILSOMADHAN_PORT:-$WEB_PORT}"
+
+# This server may already run other websites (Apache, nginx, Caddy, a hosting panel ...).
+# Those are never stopped or changed: if one of our ports is taken, another port is used.
+port_owner() { # port_owner <port> -> name of the program listening there, other than our nginx
+  ss -ltnpH "sport = :$1" 2>/dev/null | grep -o 'users:(("[^"]*"' | cut -d'"' -f2 | grep -vx nginx | head -1 || true
+}
+port_usable() { # port_usable <port> <other port of ours>
+  [[ "$1" =~ ^[0-9]{1,5}$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ] && [ "$1" != "$2" ] &&
+    { [ "$1" = 80 ] || [[ "$RESERVED_PORTS" != *" $1 "* ]]; } && [ -z "$(port_owner "$1")" ]
+}
+next_free_port() { # next_free_port <start> <other port of ours>
+  local p=$1
+  until port_usable "$p" "$2"; do p=$((p + 1)); done
+  echo "$p"
+}
+pick_port() { # pick_port <current> <first fallback> <other port of ours> <description> -> usable port
+  local cur=$1 p
+  if port_usable "$cur" "$3"; then echo "$cur"; return; fi
+  echo "  Port $cur is already used by '$(port_owner "$cur")'. That program is left untouched; MailSomadhan uses another port for $4." >&2
+  while :; do
+    p="$(ask "Port for $4" "$(next_free_port "$2" "$3")")"
+    if port_usable "$p" "$3"; then echo "$p"; return; fi
+    echo "  Port $p cannot be used (taken, reserved or the same as the other port)." >&2
+    [ "$HAVE_TTY" -eq 1 ] || fail "no usable port for $4"
+  done
+}
+WEB_PORT="$(pick_port "$WEB_PORT" 8443 "$HTTP_PORT" "the web panel (HTTPS)")"
+HTTP_PORT="$(pick_port "$HTTP_PORT" 8080 "$WEB_PORT" "plain HTTP (certificate checks, redirect to the panel)")"
+for v in WEB_PORT HTTP_PORT; do
+  sed -i "/^$v=/d" "$INSTALL_CONF"; echo "$v='${!v}'" >> "$INSTALL_CONF"
+done
+
+check_web_ports() { # right before nginx starts: fail clearly if something grabbed a port meanwhile
+  local p owner
+  for p in "$HTTP_PORT" "$WEB_PORT"; do
+    owner="$(port_owner "$p")"
+    [ -z "$owner" ] || fail "port $p was taken by '$owner' during the installation; run the installer again to choose another port"
+  done
+}
 # Where updates come from: keep what an earlier install recorded unless overridden.
 OLD_REPO_URL=""; OLD_BRANCH=""
 if [ -f "$HELPER_CONF" ]; then
@@ -189,7 +229,7 @@ apt-get install -y -qq --no-install-recommends \
   ca-certificates curl gnupg git openssl sudo rsync iproute2 \
   postfix postfix-pgsql \
   dovecot-core dovecot-imapd dovecot-lmtpd dovecot-pgsql dovecot-sieve \
-  rspamd redis-server postgresql nginx certbot ufw fail2ban rclone \
+  rspamd redis-server postgresql nginx certbot python3-certbot-dns-cloudflare ufw fail2ban rclone \
   python3 python3-venv python3-pip >/dev/null
 
 rm -f /usr/sbin/policy-rc.d
@@ -877,7 +917,12 @@ systemctl restart mailsomadhan-api mailsomadhan-web
 systemctl enable -q mailsomadhan-collector mailsomadhan-campaigns 2>/dev/null || true
 systemctl restart mailsomadhan-collector mailsomadhan-campaigns
 /usr/local/sbin/mailsomadhan-helper tls-sync >/dev/null
-systemctl restart nginx
+check_web_ports
+if ! systemctl restart nginx; then
+  echo "--- nginx -t"; nginx -t 2>&1 | tail -n 8
+  echo "--- journalctl -u nginx"; journalctl -u nginx -n 15 --no-pager 2>/dev/null | tail -n 15
+  fail "the web server (nginx) did not start; the reason is shown above"
+fi
 systemctl enable -q fail2ban 2>/dev/null || true
 systemctl restart fail2ban || warn "fail2ban did not start; check 'journalctl -u fail2ban'"
 
@@ -891,10 +936,23 @@ elif command -v ufw >/dev/null; then
   ssh_ports="$(sshd -T 2>/dev/null | awk '/^port / {print $2}' || true)"
   for p in ${ssh_ports:-22}; do ufw allow "$p/tcp" >/dev/null 2>&1 || true; done
   for p in 25 "$HTTP_PORT" 465 587 993 "$WEB_PORT"; do ufw allow "$p/tcp" >/dev/null 2>&1 || true; done
-  if ufw --force enable >/dev/null 2>&1; then
-    info "Open ports: ${ssh_ports:-22} (SSH), 25, $HTTP_PORT, 465, 587, 993, $WEB_PORT"
+  ours=" ${ssh_ports:-22} 25 $HTTP_PORT 465 587 993 $WEB_PORT "
+  if ufw status 2>/dev/null | grep -q '^Status: active'; then
+    info "Firewall already active: opened ports${ours% }"
   else
-    warn "could not enable ufw; make sure ports 25, $HTTP_PORT, 465, 587, 993 and $WEB_PORT are reachable"
+    # Turning a firewall on would cut off other public services on this server (websites, panels).
+    # Public listeners of other programs (ours: sshd, Postfix, Dovecot, nginx).
+    others="$(ss -ltnpH 2>/dev/null | awk '$4 !~ /^(127\.|\[::1\]|\[::ffff:127\.)/ {
+                n = $4; sub(/.*:/, "", n); p = $0; sub(/.*users:\(\("/, "", p); sub(/".*/, "", p)
+                if (p !~ /^(sshd|master|dovecot|nginx|systemd-resolve)$/) print n }' | sort -un | tr '\n' ' ' || true)"
+    if [ -n "$others" ]; then
+      warn "Firewall (ufw) not enabled: other programs listen publicly on port(s) ${others% }, and enabling it would block them."
+      warn "Rules for MailSomadhan were added; enable it yourself when ready: ufw allow <their ports>/tcp && ufw enable"
+    elif ufw --force enable >/dev/null 2>&1; then
+      info "Open ports:${ours% }"
+    else
+      warn "could not enable ufw; make sure ports 25, $HTTP_PORT, 465, 587, 993 and $WEB_PORT are reachable"
+    fi
   fi
 fi
 
@@ -902,6 +960,9 @@ fi
 LE_OK=0
 if [ -d "/etc/letsencrypt/live/$MAIL_HOSTNAME" ]; then
   LE_OK=1
+elif [ "$HTTP_PORT" != 80 ]; then
+  warn "Port 80 belongs to another web server, so no certificate was requested automatically."
+  warn "In the panel, open 'Hosts & TLS' and choose DNS record or Cloudflare API (or let your web server serve the check files)."
 elif [ "${MAILSOMADHAN_NO_LETSENCRYPT:-0}" != "1" ]; then
   step "Requesting a Let's Encrypt certificate for $MAIL_HOSTNAME"
   resolved="$(getent ahosts "$MAIL_HOSTNAME" 2>/dev/null | awk '{print $1}' | grep -vE '^(127\.|::1)' | head -n1 || true)"
