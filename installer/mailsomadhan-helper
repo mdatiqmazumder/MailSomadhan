@@ -283,9 +283,9 @@ update_check() {
     rm -rf "$CACHE"
     git clone -q --depth 50 --branch "$BRANCH" "$REPO_URL" "$CACHE"
   fi
-  python3 - "$CACHE" "$VERSION_JSON" <<'PY'
-import json, subprocess, sys
-cache, version_json = sys.argv[1:3]
+  python3 - "$CACHE" "$VERSION_JSON" "$STATUS_DIR/update-check.json" <<'PY'
+import datetime, json, os, subprocess, sys
+cache, version_json, out_path = sys.argv[1:4]
 def git(*args):
     return subprocess.run(["git", "-C", cache, *args], capture_output=True, text=True).stdout
 installed = {}
@@ -305,14 +305,22 @@ for c in commits:
         break
     changes.append(c)
 latest = commits[0] if commits else {}
-print(json.dumps({
+result = {
     "latest_version": git("show", "HEAD:VERSION").strip(),
     "latest_commit": latest.get("commit", ""),
     "latest_date": latest.get("date", ""),
     "update_available": bool(latest) and latest.get("commit") != current,
     "changes": changes[:30],
     "changes_complete": found,
-}))
+    "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+}
+# Kept for the panel's "update available" notice (refreshed by mailsomadhan-update-check.timer).
+tmp = out_path + ".tmp"
+with open(tmp, "w") as fh:
+    json.dump(result, fh)
+os.chmod(tmp, 0o644)
+os.replace(tmp, out_path)
+print(json.dumps(result))
 PY
 }
 
@@ -758,6 +766,22 @@ PY
 
   update-check)
     update_check
+    ;;
+
+  service-restart)
+    # Only MailSomadhan's own services and the mail stack; never the database or other programs.
+    svc="${1:-}"
+    case " postfix dovecot rspamd redis-server nginx fail2ban mailsomadhan-api mailsomadhan-web mailsomadhan-collector mailsomadhan-campaigns " in
+      *" $svc "*) [ -n "$svc" ] || die "missing service" ;;
+      *) die "this service cannot be restarted from the panel" ;;
+    esac
+    if [ "$svc" = mailsomadhan-api ] || [ "$svc" = mailsomadhan-web ]; then
+      # The panel itself: restart a moment later so this request can still answer.
+      systemd-run --quiet --collect --on-active=2 /usr/bin/systemctl restart "$svc"
+    else
+      systemctl restart "$svc"
+    fi
+    echo "restarted $svc"
     ;;
 
   update-start)

@@ -101,12 +101,13 @@ fi
 # --------------------------------------------------------------------------- services
 step "Stopping MailSomadhan services"
 UNITS=(mailsomadhan-api mailsomadhan-web mailsomadhan-collector mailsomadhan-campaigns
-       mailsomadhan-backup.timer mailsomadhan-backup mailsomadhan-update mailsomadhan-tls)
+       mailsomadhan-backup.timer mailsomadhan-backup mailsomadhan-update mailsomadhan-tls
+       mailsomadhan-update-check.timer mailsomadhan-update-check)
 for u in "${UNITS[@]}"; do
   systemctl disable -q --now "$u" 2>/dev/null || systemctl stop "$u" 2>/dev/null || true
 done
-for u in api web collector campaigns backup; do rm -f "/etc/systemd/system/mailsomadhan-$u.service"; done
-rm -f /etc/systemd/system/mailsomadhan-backup.timer
+for u in api web collector campaigns backup update-check; do rm -f "/etc/systemd/system/mailsomadhan-$u.service"; done
+rm -f /etc/systemd/system/mailsomadhan-backup.timer /etc/systemd/system/mailsomadhan-update-check.timer
 systemctl daemon-reload
 systemctl reset-failed 'mailsomadhan-*' 2>/dev/null || true
 

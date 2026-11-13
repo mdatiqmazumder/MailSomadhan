@@ -802,6 +802,30 @@ ProtectSystem=full
 WantedBy=multi-user.target
 EOF
 
+# Looks for a new version a few times a day so the panel can show "update available".
+cat > /etc/systemd/system/mailsomadhan-update-check.service <<EOF
+[Unit]
+Description=MailSomadhan: check for a new version
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mailsomadhan-helper update-check
+EOF
+cat > /etc/systemd/system/mailsomadhan-update-check.timer <<EOF
+[Unit]
+Description=MailSomadhan: check for a new version every 6 hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:00:00
+RandomizedDelaySec=45min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
 cat > /etc/nginx/snippets/mailsomadhan-app.conf <<EOF
 # Shared by every MailSomadhan virtual host.
 ssl_protocols TLSv1.2 TLSv1.3;
@@ -916,6 +940,8 @@ systemctl restart dovecot
 systemctl restart postfix
 systemctl restart mailsomadhan-api mailsomadhan-web
 systemctl enable -q mailsomadhan-collector mailsomadhan-campaigns 2>/dev/null || true
+systemctl daemon-reload
+systemctl enable -q --now mailsomadhan-update-check.timer 2>/dev/null || true
 systemctl restart mailsomadhan-collector mailsomadhan-campaigns
 /usr/local/sbin/mailsomadhan-helper tls-sync >/dev/null
 check_web_ports

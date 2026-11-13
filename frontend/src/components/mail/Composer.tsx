@@ -3,6 +3,7 @@
 import { ChevronDown, ChevronUp, Paperclip, Send, Trash2, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { RecipientInput } from "./RecipientInput";
 import { api, formatBytes } from "@/lib/api";
 import { Button, IconButton, cx, toast, confirmDialog } from "../ui";
 import MessageBody from "./MessageBody";
@@ -170,16 +171,16 @@ export default function Composer({ initial, maxAttachmentMb, onClose }: Props) {
         <div className="divide-y divide-border border-b border-border px-4">
           <div className="flex items-center gap-2">
             <span className="w-8 shrink-0 text-xs text-muted">To</span>
-            <input
+            <RecipientInput
               className={field}
               value={to}
               autoFocus={!initial.to}
-              onChange={(e) => {
-                setTo(e.target.value);
+              onChange={(v) => {
+                setTo(v);
                 markDirty();
               }}
               placeholder="Recipients, separated by commas"
-              aria-label="To"
+              label="To"
             />
             {!showCc && (
               <button className="shrink-0 text-xs text-muted hover:text-text" onClick={() => setShowCc(true)}>
@@ -191,11 +192,11 @@ export default function Composer({ initial, maxAttachmentMb, onClose }: Props) {
             <>
               <div className="flex items-center gap-2">
                 <span className="w-8 shrink-0 text-xs text-muted">Cc</span>
-                <input className={field} value={cc} onChange={(e) => { setCc(e.target.value); markDirty(); }} aria-label="Cc" />
+                <RecipientInput className={field} value={cc} onChange={(v) => { setCc(v); markDirty(); }} label="Cc" />
               </div>
               <div className="flex items-center gap-2">
                 <span className="w-8 shrink-0 text-xs text-muted">Bcc</span>
-                <input className={field} value={bcc} onChange={(e) => { setBcc(e.target.value); markDirty(); }} aria-label="Bcc" />
+                <RecipientInput className={field} value={bcc} onChange={(v) => { setBcc(v); markDirty(); }} label="Bcc" />
               </div>
             </>
           )}

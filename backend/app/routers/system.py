@@ -159,3 +159,88 @@ def update_status():
         "result": _read_json(Path(settings.status_dir) / "update-result.json"),
         "log": _log_tail(),
     }
+
+
+@router.get("/system/update-notice")
+def update_notice():
+    """For the header: is a newer version known? Read from the last automatic or manual check
+    (mailsomadhan-update-check.timer runs one every 6 hours); never contacts GitHub itself."""
+    installed = _read_json(Path(settings.status_dir) / "version.json") or {}
+    check = _read_json(Path(settings.status_dir) / "update-check.json") or {}
+    latest = check.get("latest_commit", "")
+    return {
+        "update_available": bool(latest) and latest != installed.get("commit", "") and not _update_running(),
+        "current_version": installed.get("version", ""),
+        "latest_version": check.get("latest_version", ""),
+        "checked_at": check.get("checked_at"),
+        "update_running": _update_running(),
+    }
+
+
+# ---------------------------------------------------------------- services and scheduled jobs
+SERVICES_INFO = [
+    # name, label, what it does, can be restarted from the panel
+    ("postfix", "Mail transfer (Postfix)", "Receives mail from the internet and sends your users' mail out. Holds the mail queue.", True),
+    ("dovecot", "Mailbox access (Dovecot)", "Stores mail and serves IMAP for webmail and mail apps; enforces storage quotas.", True),
+    ("rspamd", "Spam filter (Rspamd)", "Checks every message for spam and viruses and signs outgoing mail with DKIM.", True),
+    ("redis-server", "Redis", "Memory for the spam filter: greylisting and learned spam data.", True),
+    ("postgresql", "Database (PostgreSQL)", "Domains, mailboxes, settings and the message log.", False),
+    ("nginx", "Web server (nginx)", "Serves the panel and webmail over HTTPS and answers certificate checks.", True),
+    ("fail2ban", "Brute-force protection (fail2ban)", "Blocks addresses that keep failing to sign in.", True),
+    ("mailsomadhan-api", "Panel API", "The back end of this panel and of webmail.", True),
+    ("mailsomadhan-web", "Panel web app", "The pages of this panel and of webmail.", True),
+    ("mailsomadhan-collector", "Mail log collector (job)", "Reads the mail log continuously and fills the message log, analytics and campaign delivery status.", True),
+    ("mailsomadhan-campaigns", "Campaign sender (queue worker)", "Sends queued campaign messages one by one with the chosen pacing and limits.", True),
+]
+TIMERS_INFO = [
+    ("mailsomadhan-backup.timer", "Scheduled backup", "Encrypted backup to Google Drive on the schedule set under Backups."),
+    ("mailsomadhan-update-check.timer", "Update check", "Looks for a new MailSomadhan version every 6 hours."),
+    ("certbot.timer", "Certificate renewal", "Renews Let's Encrypt certificates before they expire."),
+]
+
+
+def _unit(name: str) -> dict:
+    import os
+    import subprocess
+
+    try:
+        # TZ=UTC: systemctl prints every timestamp in the time zone of its environment.
+        out = subprocess.run(["systemctl", "show", name, "--property=ActiveState,SubState,UnitFileState,"
+                              "ActiveEnterTimestamp,NextElapseUSecRealtime,LastTriggerUSec,LoadState"],
+                             capture_output=True, text=True, timeout=15, env={**os.environ, "TZ": "UTC"}).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    props = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+
+    def stamp(key: str) -> str | None:
+        # "Fri 2026-11-14 01:02:03 UTC" -> ISO 8601
+        m = re.search(r"(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) UTC", props.get(key, ""))
+        return f"{m.group(1)}T{m.group(2)}Z" if m else None
+
+    return {"state": props.get("ActiveState", "unknown"), "sub": props.get("SubState", ""),
+            "enabled": props.get("UnitFileState", ""), "installed": props.get("LoadState") == "loaded",
+            "since": stamp("ActiveEnterTimestamp"), "next": stamp("NextElapseUSecRealtime"), "last": stamp("LastTriggerUSec")}
+
+
+@router.get("/system/services")
+def services():
+    if settings.dev_mode:
+        fake = {"state": "active", "sub": "running", "enabled": "enabled", "installed": True, "since": None, "next": None, "last": None}
+        return {"services": [{"name": n, "label": l, "description": d, "restartable": r, **fake} for n, l, d, r in SERVICES_INFO],
+                "timers": [{"name": n, "label": l, "description": d, **fake, "sub": "waiting"} for n, l, d in TIMERS_INFO]}
+    return {
+        "services": [{"name": n, "label": l, "description": d, "restartable": r, **_unit(n)} for n, l, d, r in SERVICES_INFO],
+        "timers": [{"name": n, "label": l, "description": d, **_unit(n)} for n, l, d in TIMERS_INFO],
+    }
+
+
+@router.post("/system/services/{name}/restart")
+def restart_service(name: str):
+    if name not in {n for n, _l, _d, r in SERVICES_INFO if r}:
+        raise HTTPException(400, "This service cannot be restarted from the panel")
+    if settings.dev_mode:
+        return {"ok": True}
+    ok, output = run_helper("service-restart", name, timeout=90)
+    if not ok:
+        raise HTTPException(502, output[-600:] or "Restart failed")
+    return {"ok": True}

@@ -1,13 +1,13 @@
 "use client";
 
 import {
-  Activity, AtSign, BarChart3, ChevronsLeft, DatabaseBackup, Download, FileText, Filter, Forward, Gauge, Globe, ListOrdered,
+  Activity, AtSign, BarChart3, ChevronsLeft, Cpu, DatabaseBackup, Download, FileText, Filter, Forward, Gauge, Globe, ListOrdered,
   History, LogOut, Mail, Megaphone, Menu as MenuIcon, ScrollText, Send, Server, Settings, ShieldAlert, UserCog, X,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { type AdminMe, logout, useMe } from "@/lib/api";
+import { type AdminMe, api, logout, useMe } from "@/lib/api";
 import { AdminContext } from "@/lib/admin";
 import ThemeToggle from "@/components/ThemeToggle";
 import { Avatar, Menu, MenuItem, Spinner, cx } from "@/components/ui";
@@ -50,6 +50,7 @@ const NAV: { group: string; items: Item[] }[] = [
       { href: "/admin/hosts", label: "Hosts & TLS", icon: Server },
       { href: "/admin/relays", label: "SMTP relays", icon: Send },
       { href: "/admin/backups", label: "Backups", icon: DatabaseBackup },
+      { href: "/admin/services", label: "Services & jobs", icon: Cpu },
       { href: "/admin/updates", label: "Updates", icon: Download },
       { href: "/admin/settings", label: "Settings", icon: Settings },
     ],
@@ -82,6 +83,22 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   }, [pathname, me]);
 
   const admin = me && me.kind === "admin" ? (me as AdminMe) : null;
+  const isSuper = admin?.role === "super_admin";
+  const [notice, setNotice] = useState<{ update_available: boolean; latest_version: string; current_version: string; update_running: boolean } | null>(null);
+
+  // "Update available" in the header. Reads the result of the server's own periodic check
+  // (every 6 hours) and looks again every 30 minutes and whenever the window regains focus.
+  useEffect(() => {
+    if (!isSuper) return;
+    const load = () => api<typeof notice>("/admin/system/update-notice", { noRedirect: true }).then(setNotice).catch(() => {});
+    load();
+    const timer = setInterval(load, 30 * 60 * 1000);
+    window.addEventListener("focus", load);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", load);
+    };
+  }, [isSuper, pathname]);
   const allowed = (i: Item) => admin?.role === "super_admin" || (!!i.perm && !!admin?.permissions.includes(i.perm));
   const nav = NAV.map((g) => ({ ...g, items: g.items.filter(allowed) })).filter((g) => g.items.length);
   const first = nav[0]?.items[0]?.href;
@@ -195,6 +212,22 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <span className="truncate font-medium">{page?.label || (pathname.startsWith("/admin/account") ? "My account" : "Admin")}</span>
           </nav>
           <span className="flex-1" />
+          {notice?.update_running && !pathname.startsWith("/admin/updates") && (
+            <Link href="/admin/updates" className="inline-flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent-soft px-3 py-1 text-xs font-medium text-accent">
+              <Download className="h-3.5 w-3.5 animate-pulse" /> Updating…
+            </Link>
+          )}
+          {notice?.update_available && !pathname.startsWith("/admin/updates") && (
+            <Link
+              href="/admin/updates"
+              className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-xs font-semibold text-accent-fg shadow-card hover:opacity-90"
+              title="A new version of MailSomadhan is available"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Update available{notice.latest_version && notice.latest_version !== notice.current_version ? ` · v${notice.latest_version}` : ""} — Update now</span>
+              <span className="sm:hidden">Update</span>
+            </Link>
+          )}
           <span className="hidden items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs text-muted md:inline-flex">
             <Activity className="h-3.5 w-3.5 text-ok" /> Live
           </span>

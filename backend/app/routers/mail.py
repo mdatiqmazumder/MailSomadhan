@@ -37,6 +37,59 @@ def _fail(exc: MailError):
     raise HTTPException(400, str(exc)) from exc
 
 
+@router.get("/contacts")
+def contacts(user: Mailbox = Depends(require_user), db: Session = Depends(get_db)):
+    """Addresses to suggest while composing: people this user wrote to (most often and most recently
+    first), people who wrote to them, and the other mailboxes of their domain. Campaign recipients are
+    left out so one large campaign does not flood the suggestions."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import func, select
+
+    from ..models import CampaignRecipient, MailDelivery, MailMessage
+
+    me = user.email.lower()
+    since = datetime.now(timezone.utc) - timedelta(days=365)
+    campaign_ids = select(CampaignRecipient.message_id).where(CampaignRecipient.message_id != "")
+    score: dict[str, float] = {}
+    last: dict[str, datetime] = {}
+
+    sent = (db.query(MailDelivery.recipient, func.count(MailDelivery.id), func.max(MailMessage.created_at))
+            .join(MailMessage, MailMessage.id == MailDelivery.message_pk)
+            .filter(MailMessage.user_email == me, MailMessage.created_at >= since,
+                    MailMessage.message_id.not_in(campaign_ids))
+            .group_by(MailDelivery.recipient).order_by(func.count(MailDelivery.id).desc()).limit(500).all())
+    for addr, count, when in sent:
+        score[addr.lower()] = score.get(addr.lower(), 0) + 3 * count
+        last[addr.lower()] = when
+    received = (db.query(MailMessage.sender, func.count(MailMessage.id), func.max(MailMessage.created_at))
+                .join(MailDelivery, MailDelivery.message_pk == MailMessage.id)
+                .filter(MailDelivery.recipient == me, MailMessage.created_at >= since, MailMessage.sender != "",
+                        MailMessage.spam_action.not_in(("reject", "add header", "rewrite subject")))
+                .group_by(MailMessage.sender).order_by(func.count(MailMessage.id).desc()).limit(300).all())
+    for addr, count, when in received:
+        a = addr.lower()
+        if a.startswith(("mailer-daemon@", "postmaster@", "no-reply", "noreply", "bounce")):
+            continue
+        score[a] = score.get(a, 0) + count
+        last[a] = max(last.get(a, when), when) if when else last.get(a)
+    names = {m.email: m.display_name for m in db.query(Mailbox).filter(Mailbox.domain_id == user.domain_id, Mailbox.active)}
+    for addr in names:
+        score.setdefault(addr, 0.5)
+    score.pop(me, None)
+
+    def recency(addr: str) -> float:
+        when = last.get(addr)
+        if not when:
+            return 0
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        return max(0.0, 30 - (datetime.now(timezone.utc) - when).days) / 10
+
+    ranked = sorted((a for a in score if EMAIL_RE.match(a)), key=lambda a: -(score[a] + recency(a)))[:300]
+    return [{"email": a, "name": names.get(a, "")} for a in ranked]
+
+
 @router.get("/connection")
 def connection(user: Mailbox = Depends(require_user), db: Session = Depends(get_db)):
     return connection_info(db, user)
