@@ -41,6 +41,8 @@ class Domain(Base):
     dkim_selector: Mapped[str] = mapped_column(String(63), default="")
     dkim_public: Mapped[str] = mapped_column(Text, default="")
     default_quota_mb: Mapped[int] = mapped_column(Integer, default=1024)
+    # Total storage the domain's mailboxes may be given together (sum of their quotas).
+    storage_limit_mb: Mapped[int] = mapped_column(Integer, default=102400, server_default="102400")
     relay_id: Mapped[int | None] = mapped_column(ForeignKey("relays.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 

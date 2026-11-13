@@ -9,7 +9,9 @@ from .system import DEFAULT_SETTINGS, write_hosts_file, write_selector_map
 
 
 def cmd_init(args) -> None:
+    from .migrate import migrate
     Base.metadata.create_all(engine)
+    migrate()
     with SessionLocal() as db:
         for key, value in DEFAULT_SETTINGS.items():
             if not db.get(Setting, key):

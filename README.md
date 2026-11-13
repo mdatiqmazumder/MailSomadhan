@@ -35,8 +35,8 @@ curl -fsSL https://raw.githubusercontent.com/mdatiqmazumder/MailSomadhan/main/in
 | Campaigns | Oversee users' individual sending, approve large campaigns, set daily and per-domain limits, manage the do-not-send list |
 | Mail filters | Block or trust senders and domains, block IP ranges and attachment types |
 | Backups | Encrypted, scheduled backups to Google Drive (see [docs/BACKUP.md](docs/BACKUP.md)) |
-| Domains | Add any number of domains; shows the MX, SPF, DKIM and DMARC records to publish and checks them live; DKIM key rotation |
-| Mailboxes | Create users, set quotas, reset passwords, disable accounts |
+| Domains | Add any number of domains; shows the MX, SPF, DKIM and DMARC records to publish and checks them live; DKIM key rotation; a storage pool shared by its mailboxes |
+| Mailboxes | Create users, set each mailbox's storage (never unlimited, never above the server maximum or the domain's pool), see real usage, reset passwords, disable accounts |
 | Aliases | Forwarding addresses and catch-alls |
 | Hosts & TLS | Extra hostnames for the panel, SMTP and IMAP, each with its own Let's Encrypt certificate (SNI) |
 | SMTP relays | Send through external SMTP services; one relay per domain or a default for all |

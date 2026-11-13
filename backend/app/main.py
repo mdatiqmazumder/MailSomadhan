@@ -4,12 +4,14 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .db import Base, engine
+from .migrate import migrate
 from .routers import admin, analytics, auth, backup, campaigns, filters, mail, system
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(engine)
+    migrate()
     yield
 
 

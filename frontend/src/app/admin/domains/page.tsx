@@ -1,8 +1,9 @@
 "use client";
 
-import { CheckCircle2, CircleAlert, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { CheckCircle2, CircleAlert, HardDrive, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, useLoad } from "@/lib/api";
+import { formatMb } from "@/components/Storage";
 import { Badge, Button, Card, CopyText, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Toggle, toast, confirmDialog } from "@/components/ui";
 
 type Domain = {
@@ -10,6 +11,9 @@ type Domain = {
   name: string;
   active: boolean;
   default_quota_mb: number;
+  storage_limit_mb: number;
+  allocated_mb: number;
+  used_kb: number;
   relay_id: number | null;
   relay_name: string | null;
   mailboxes: number;
@@ -24,6 +28,7 @@ export default function DomainsPage() {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [dnsFor, setDnsFor] = useState<Domain | null>(null);
+  const [storageFor, setStorageFor] = useState<Domain | null>(null);
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
@@ -79,11 +84,23 @@ export default function DomainsPage() {
         ) : !data?.length ? (
           <Empty title="No domains yet">Add a domain to start creating mailboxes for it.</Empty>
         ) : (
-          <Table head={["Domain", "Mailboxes", "Outbound relay", "Active", ""]}>
+          <Table head={["Domain", "Mailboxes", "Storage assigned", "Outbound relay", "Active", ""]} minWidth={860}>
             {data.map((d) => (
               <tr key={d.id}>
                 <td className="font-medium">{d.name}</td>
                 <td className="tabular-nums">{d.mailboxes}</td>
+                <td>
+                  <button onClick={() => setStorageFor(d)} className="block w-40 text-left" title="Change storage limits">
+                    <div className="mb-1 flex justify-between text-xs">
+                      <span className="tabular">{formatMb(d.allocated_mb)}</span>
+                      <span className="text-muted tabular">of {formatMb(d.storage_limit_mb)}</span>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-sunken">
+                      <div className={d.allocated_mb >= d.storage_limit_mb ? "h-full rounded-full bg-warn" : "h-full rounded-full bg-accent"} style={{ width: `${Math.min(100, (d.allocated_mb / Math.max(1, d.storage_limit_mb)) * 100)}%` }} />
+                    </div>
+                    <span className="mt-0.5 block text-[11px] text-muted">{(d.used_kb / 1024 / 1024).toFixed(d.used_kb > 1024 * 1024 * 10 ? 0 : 2)} GB actually used</span>
+                  </button>
+                </td>
                 <td>
                   <Select
                     aria-label={`Relay for ${d.name}`}
@@ -102,6 +119,7 @@ export default function DomainsPage() {
                 </td>
                 <td>
                   <div className="flex justify-end gap-1">
+                    <IconButton label="Storage limits" onClick={() => setStorageFor(d)}><HardDrive className="h-4 w-4" /></IconButton>
                     <Button size="sm" onClick={() => setDnsFor(d)}>DNS records</Button>
                     <IconButton label="Delete domain" onClick={() => remove(d)}>
                       <Trash2 className="h-4 w-4" />
@@ -129,6 +147,7 @@ export default function DomainsPage() {
       )}
 
       {dnsFor && <DnsModal domain={dnsFor} onClose={() => setDnsFor(null)} />}
+      {storageFor && <StorageModal domain={storageFor} onClose={() => setStorageFor(null)} onSaved={() => { setStorageFor(null); reload(); }} />}
     </>
   );
 }
@@ -199,5 +218,48 @@ function Row({ label, value }: { label: string; value: string }) {
       <code className="min-w-0 flex-1 rounded bg-raised px-2 py-1.5 font-mono text-xs break-all">{value}</code>
       <CopyText value={value} />
     </div>
+  );
+}
+
+function StorageModal({ domain, onClose, onSaved }: { domain: Domain; onClose: () => void; onSaved: () => void }) {
+  const settings = useLoad<{ max_mailbox_quota_mb: string }>("/admin/settings");
+  const maxMb = Number(settings.data?.max_mailbox_quota_mb || 10240);
+  const [limitGb, setLimitGb] = useState(String(domain.storage_limit_mb / 1024));
+  const [defaultGb, setDefaultGb] = useState(String(domain.default_quota_mb / 1024));
+  const [busy, setBusy] = useState(false);
+  const limitMb = Math.round(Number(limitGb) * 1024);
+  const defaultMb = Math.round(Number(defaultGb) * 1024);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await api(`/admin/domains/${domain.id}`, { method: "PATCH", json: { storage_limit_mb: limitMb, default_quota_mb: defaultMb } });
+      toast.ok(`Storage limits for ${domain.name} saved`);
+      onSaved();
+    } catch (err) {
+      toast.error((err as Error).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={`Storage for ${domain.name}`} description="Every mailbox has a fixed size; together they can never exceed the domain's storage limit." onClose={onClose}>
+      <form onSubmit={save} className="space-y-4">
+        <div className="rounded-lg bg-raised px-3 py-2.5 text-sm">
+          <b>{formatMb(domain.allocated_mb)}</b> assigned to {domain.mailboxes} mailbox{domain.mailboxes === 1 ? "" : "es"} · {(domain.used_kb / 1024 / 1024).toFixed(2)} GB actually used
+        </div>
+        <Field label="Domain storage limit (GB)" hint={`Total that can be assigned to this domain's mailboxes. At least ${formatMb(domain.allocated_mb)} (already assigned).`}>
+          <Input type="number" min={Math.max(0.5, domain.allocated_mb / 1024)} step={1} value={limitGb} onChange={(e) => setLimitGb(e.target.value)} required />
+        </Field>
+        <Field label="Default size for new mailboxes (GB)" hint={`At most ${formatMb(Math.min(maxMb, limitMb || maxMb))}.`}>
+          <Input type="number" min={0.1} step={0.5} max={Math.min(maxMb, limitMb || maxMb) / 1024} value={defaultGb} onChange={(e) => setDefaultGb(e.target.value)} required />
+        </Field>
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button type="submit" variant="primary" loading={busy}>Save</Button>
+        </div>
+      </form>
+    </Modal>
   );
 }

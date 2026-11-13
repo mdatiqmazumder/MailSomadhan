@@ -21,6 +21,8 @@ DEFAULT_SETTINGS = {
     "brand_name": "MailSomadhan",
     "max_attachment_mb": "25",
     "default_quota_mb": "1024",
+    "max_mailbox_quota_mb": "10240",        # largest quota any single mailbox may get
+    "default_domain_storage_mb": "102400",  # storage pool for a newly added domain
     "acme_email": "",
     # Individual sending (campaigns)
     "campaign_daily_limit": "150",         # messages per user in any 24 hours

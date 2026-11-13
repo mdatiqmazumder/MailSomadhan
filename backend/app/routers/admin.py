@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import require_admin
 from ..models import Alias, Domain, Host, Mailbox, Relay, Setting
+from ..quota import allocated_mb, check_mailbox_quota, gb, max_mailbox_mb, usage_kb
 from ..security import DOMAIN_RE, EMAIL_RE, LOCAL_RE, check_password_rules, hash_password
 from ..system import (DEFAULT_SETTINGS, disk_usage, dns_records, generate_dkim, get_setting,
                       get_settings_map, mail_queue, remove_dkim, run_helper, service_status,
@@ -50,13 +51,18 @@ class DomainIn(BaseModel):
 class DomainPatch(BaseModel):
     active: bool | None = None
     default_quota_mb: int | None = Field(default=None, ge=1, le=1024 * 1024)
+    storage_limit_mb: int | None = Field(default=None, ge=1, le=100 * 1024 * 1024)
     relay_id: int | None = None
     clear_relay: bool = False
 
 
-def _domain_out(d: Domain, counts: dict[int, int] | None = None) -> dict:
+def _domain_out(d: Domain, counts: dict[int, int] | None = None, allocated: dict[int, int] | None = None,
+                used: dict[int, int] | None = None) -> dict:
     return {
         "id": d.id, "name": d.name, "active": d.active, "default_quota_mb": d.default_quota_mb,
+        "storage_limit_mb": d.storage_limit_mb,
+        "allocated_mb": (allocated or {}).get(d.id, 0),
+        "used_kb": (used or {}).get(d.id, 0),
         "relay_id": d.relay_id, "relay_name": d.relay.name if d.relay else None,
         "dkim_selector": d.dkim_selector,
         "mailboxes": (counts or {}).get(d.id, 0),
@@ -67,7 +73,12 @@ def _domain_out(d: Domain, counts: dict[int, int] | None = None) -> dict:
 @router.get("/domains")
 def list_domains(db: Session = Depends(get_db)):
     counts = dict(db.query(Mailbox.domain_id, func.count(Mailbox.id)).group_by(Mailbox.domain_id).all())
-    return [_domain_out(d, counts) for d in db.query(Domain).order_by(Domain.name).all()]
+    allocated = {k: int(v) for k, v in db.query(Mailbox.domain_id, func.sum(Mailbox.quota_mb)).group_by(Mailbox.domain_id).all()}
+    usage = usage_kb()
+    used: dict[int, int] = {}
+    for email, domain_id in db.query(Mailbox.email, Mailbox.domain_id).all():
+        used[domain_id] = used.get(domain_id, 0) + usage.get(email, 0)
+    return [_domain_out(d, counts, allocated, used) for d in db.query(Domain).order_by(Domain.name).all()]
 
 
 @router.post("/domains")
@@ -77,7 +88,9 @@ def create_domain(body: DomainIn, db: Session = Depends(get_db)):
         raise HTTPException(400, "Invalid domain name")
     if db.query(Domain).filter_by(name=name).first():
         raise HTTPException(409, "Domain already exists")
-    domain = Domain(name=name, default_quota_mb=int(get_setting(db, "default_quota_mb") or 1024))
+    limit = int(get_setting(db, "default_domain_storage_mb") or 102400)
+    domain = Domain(name=name, default_quota_mb=min(int(get_setting(db, "default_quota_mb") or 1024), max_mailbox_mb(db), limit),
+                    storage_limit_mb=limit)
     generate_dkim(domain)
     db.add(domain)
     db.commit()
@@ -92,7 +105,17 @@ def update_domain(domain_id: int, body: DomainPatch, db: Session = Depends(get_d
         raise HTTPException(404, "Domain not found")
     if body.active is not None:
         domain.active = body.active
+    if body.storage_limit_mb is not None:
+        used = allocated_mb(db, domain.id)
+        if body.storage_limit_mb < used:
+            raise HTTPException(400, f"{domain.name}'s mailboxes already have {gb(used)} assigned. "
+                                     f"Lower their quotas first, or set at least {gb(used)}.")
+        domain.storage_limit_mb = body.storage_limit_mb
     if body.default_quota_mb is not None:
+        if body.default_quota_mb > max_mailbox_mb(db):
+            raise HTTPException(400, f"The default quota cannot exceed the {gb(max_mailbox_mb(db))} mailbox maximum")
+        if body.default_quota_mb > domain.storage_limit_mb:
+            raise HTTPException(400, "The default quota cannot exceed the domain's storage limit")
         domain.default_quota_mb = body.default_quota_mb
     if body.clear_relay:
         domain.relay_id = None
@@ -154,10 +177,10 @@ class MailboxPatch(BaseModel):
     active: bool | None = None
 
 
-def _mailbox_out(m: Mailbox) -> dict:
+def _mailbox_out(m: Mailbox, usage: dict[str, int] | None = None) -> dict:
     return {
         "id": m.id, "email": m.email, "domain_id": m.domain_id, "display_name": m.display_name,
-        "quota_mb": m.quota_mb, "active": m.active,
+        "quota_mb": m.quota_mb, "active": m.active, "used_kb": (usage or {}).get(m.email),
         "last_login": m.last_login.isoformat() if m.last_login else None,
         "created_at": m.created_at.isoformat(),
     }
@@ -170,7 +193,8 @@ def list_mailboxes(domain_id: int | None = None, q: str = "", db: Session = Depe
         query = query.filter(Mailbox.domain_id == domain_id)
     if q:
         query = query.filter(Mailbox.email.contains(q.strip().lower()))
-    return [_mailbox_out(m) for m in query.order_by(Mailbox.email).limit(2000).all()]
+    usage = usage_kb()
+    return [_mailbox_out(m, usage) for m in query.order_by(Mailbox.email).limit(2000).all()]
 
 
 @router.post("/mailboxes")
@@ -187,6 +211,7 @@ def create_mailbox(body: MailboxIn, db: Session = Depends(get_db)):
     email = f"{local}@{domain.name}"
     if db.query(Mailbox).filter_by(email=email).first() or db.query(Alias).filter_by(source=email).first():
         raise HTTPException(409, "Address already in use")
+    check_mailbox_quota(db, domain, body.quota_mb or domain.default_quota_mb)
     mbox = Mailbox(
         domain_id=domain.id, local_part=local, email=email,
         password_hash=hash_password(body.password), display_name=body.display_name.strip(),
@@ -209,7 +234,8 @@ def update_mailbox(mailbox_id: int, body: MailboxPatch, db: Session = Depends(ge
         mbox.password_hash = hash_password(body.password)
     if body.display_name is not None:
         mbox.display_name = body.display_name.strip()
-    if body.quota_mb is not None:
+    if body.quota_mb is not None and body.quota_mb != mbox.quota_mb:
+        check_mailbox_quota(db, mbox.domain, body.quota_mb, mbox.id)
         mbox.quota_mb = body.quota_mb
     if body.active is not None:
         mbox.active = body.active
@@ -484,6 +510,8 @@ class SettingsIn(BaseModel):
     max_attachment_mb: int | None = Field(default=None, ge=1, le=200)
     default_quota_mb: int | None = Field(default=None, ge=1, le=1024 * 1024)
     acme_email: str | None = Field(default=None, max_length=320)
+    max_mailbox_quota_mb: int | None = Field(default=None, ge=1, le=1024 * 1024)
+    default_domain_storage_mb: int | None = Field(default=None, ge=1, le=100 * 1024 * 1024)
     campaign_daily_limit: int | None = Field(default=None, ge=1, le=100000)
     campaign_max_recipients: int | None = Field(default=None, ge=1, le=100000)
     campaign_domain_hourly_limit: int | None = Field(default=None, ge=0, le=10000)
@@ -502,6 +530,9 @@ def write_settings(body: SettingsIn, db: Session = Depends(get_db)):
     data = body.model_dump(exclude_none=True)
     if data.get("acme_email") and not EMAIL_RE.match(data["acme_email"]):
         raise HTTPException(400, "Invalid contact email")
+    cap = data.get("max_mailbox_quota_mb") or max_mailbox_mb(db)
+    if (data.get("default_quota_mb") or int(get_setting(db, "default_quota_mb") or 1024)) > cap:
+        raise HTTPException(400, f"The default mailbox quota cannot exceed the {gb(cap)} maximum")
     for key, value in data.items():
         if key not in DEFAULT_SETTINGS:
             continue
@@ -546,3 +577,26 @@ def queue_delete(queue_id: str):
     if not ok:
         raise HTTPException(502, output or "Could not delete the message")
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- storage overview
+@router.get("/storage")
+def storage_overview(db: Session = Depends(get_db)):
+    from ..system import disk_usage
+    usage = usage_kb()
+    cap = max_mailbox_mb(db)
+    boxes = db.query(Mailbox.email, Mailbox.quota_mb).all()
+    allocated = sum(q for _, q in boxes)
+    used_kb = sum(usage.get(e, 0) for e, _ in boxes)
+    disk = disk_usage()
+    return {
+        "max_mailbox_mb": cap,
+        "allocated_mb": allocated,
+        "used_kb": used_kb,
+        "domains_limit_mb": int(db.query(func.coalesce(func.sum(Domain.storage_limit_mb), 0)).scalar()),
+        "over_max": [e for e, q in boxes if q > cap],
+        "near_full": sorted([{"email": e, "used_kb": usage.get(e, 0), "quota_mb": q} for e, q in boxes
+                             if usage.get(e, 0) >= q * 1024 * 0.9], key=lambda x: -x["used_kb"] / (x["quota_mb"] * 1024))[:20],
+        "disk": disk,
+        "overcommitted": allocated * 1024 * 1024 > disk["total"],
+    }

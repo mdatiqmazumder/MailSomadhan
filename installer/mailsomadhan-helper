@@ -598,6 +598,11 @@ case "$cmd" in
     echo "features applied"
     ;;
 
+  quota-usage)
+    # Used storage per mailbox (KiB), for the admin console.
+    doveadm -f tab quota get -A 2>/dev/null | awk -F'\t' 'NR > 1 && $3 == "STORAGE" { print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 }'
+    ;;
+
   sync-milter)
     sync_milter
     echo "milter synchronised"

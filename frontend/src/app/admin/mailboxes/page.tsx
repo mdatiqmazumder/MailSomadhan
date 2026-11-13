@@ -4,15 +4,17 @@ import { KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { api, formatDate, useLoad } from "@/lib/api";
+import { QuotaPicker, UsageBar } from "@/components/Storage";
 import { Avatar, Button, Card, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Toggle, toast, confirmDialog } from "@/components/ui";
 
-type Domain = { id: number; name: string; default_quota_mb: number };
+type Domain = { id: number; name: string; default_quota_mb: number; storage_limit_mb: number; allocated_mb: number };
 type Mailbox = {
   id: number;
   email: string;
   domain_id: number;
   display_name: string;
   quota_mb: number;
+  used_kb: number | null;
   active: boolean;
   last_login: string | null;
 };
@@ -25,6 +27,8 @@ function randomPassword() {
 
 export default function MailboxesPage() {
   const domains = useLoad<Domain[]>("/admin/domains");
+  const settings = useLoad<{ max_mailbox_quota_mb: string }>("/admin/settings");
+  const maxMb = Number(settings.data?.max_mailbox_quota_mb || 10240);
   const { data, loading, reload } = useLoad<Mailbox[]>("/admin/mailboxes");
   const [filter, setFilter] = useState("");
   const [domainFilter, setDomainFilter] = useState("");
@@ -91,7 +95,7 @@ export default function MailboxesPage() {
         ) : !visible.length ? (
           <Empty title={data?.length ? "No mailboxes match" : "No mailboxes yet"} />
         ) : (
-          <Table head={["Mailbox", "Quota", "Last sign-in", "Active", ""]}>
+          <Table head={["Mailbox", "Storage", "Last sign-in", "Active", ""]}>
             {visible.map((m) => (
               <tr key={m.id}>
                 <td>
@@ -103,7 +107,10 @@ export default function MailboxesPage() {
                     </span>
                   </Link>
                 </td>
-                <td className="tabular-nums whitespace-nowrap">{m.quota_mb >= 1024 ? `${(m.quota_mb / 1024).toFixed(m.quota_mb % 1024 ? 1 : 0)} GB` : `${m.quota_mb} MB`}</td>
+                <td>
+                  <UsageBar usedKb={m.used_kb} quotaMb={m.quota_mb} compact />
+                  {m.quota_mb > maxMb && <span className="mt-0.5 block text-[11px] text-warn">Above the {maxMb / 1024} GB maximum</span>}
+                </td>
                 <td className="whitespace-nowrap text-muted">{m.last_login ? formatDate(m.last_login) : "Never"}</td>
                 <td>
                   <Toggle label={`${m.email} active`} checked={m.active} onChange={(v) => setActive(m, v)} />
@@ -127,6 +134,7 @@ export default function MailboxesPage() {
       {adding && domains.data && (
         <MailboxForm
           domains={domains.data}
+          maxMb={maxMb}
           onClose={() => setAdding(false)}
           onSaved={() => {
             setAdding(false);
@@ -137,6 +145,7 @@ export default function MailboxesPage() {
       {editing && (
         <MailboxForm
           domains={domains.data || []}
+          maxMb={maxMb}
           mailbox={editing}
           onClose={() => setEditing(null)}
           onSaved={() => {
@@ -149,12 +158,15 @@ export default function MailboxesPage() {
   );
 }
 
-function MailboxForm({ domains, mailbox, onClose, onSaved }: { domains: Domain[]; mailbox?: Mailbox; onClose: () => void; onSaved: () => void }) {
+function MailboxForm({ domains, mailbox, maxMb, onClose, onSaved }: { domains: Domain[]; mailbox?: Mailbox; maxMb: number; onClose: () => void; onSaved: () => void }) {
   const [domainId, setDomainId] = useState(String(mailbox?.domain_id ?? domains[0]?.id ?? ""));
   const [local, setLocal] = useState("");
   const [displayName, setDisplayName] = useState(mailbox?.display_name ?? "");
   const [password, setPassword] = useState("");
-  const [quota, setQuota] = useState(String(mailbox?.quota_mb ?? domains[0]?.default_quota_mb ?? 1024));
+  const [quota, setQuota] = useState<number>(mailbox?.quota_mb ?? Math.min(domains[0]?.default_quota_mb ?? 1024, maxMb));
+  const domain = domains.find((d) => d.id === Number(domainId));
+  // Free pool of the domain; when editing, this mailbox's current quota is available to itself.
+  const available = domain ? domain.storage_limit_mb - domain.allocated_mb + (mailbox ? mailbox.quota_mb : 0) : maxMb;
   const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {
@@ -164,12 +176,12 @@ function MailboxForm({ domains, mailbox, onClose, onSaved }: { domains: Domain[]
       if (mailbox) {
         await api(`/admin/mailboxes/${mailbox.id}`, {
           method: "PATCH",
-          json: { display_name: displayName, quota_mb: Number(quota), ...(password ? { password } : {}) },
+          json: { display_name: displayName, quota_mb: quota, ...(password ? { password } : {}) },
         });
         toast.ok("Mailbox updated");
       } else {
         await api("/admin/mailboxes", {
-          json: { domain_id: Number(domainId), local_part: local, password, display_name: displayName, quota_mb: Number(quota) },
+          json: { domain_id: Number(domainId), local_part: local, password, display_name: displayName, quota_mb: quota },
         });
         toast.ok("Mailbox created");
       }
@@ -188,7 +200,7 @@ function MailboxForm({ domains, mailbox, onClose, onSaved }: { domains: Domain[]
             <div className="flex items-center gap-1.5">
               <Input autoFocus value={local} onChange={(e) => setLocal(e.target.value)} placeholder="name" required />
               <span className="text-muted">@</span>
-              <Select value={domainId} onChange={(e) => setDomainId(e.target.value)} aria-label="Domain">
+              <Select value={domainId} onChange={(e) => { setDomainId(e.target.value); const d = domains.find((x) => x.id === Number(e.target.value)); if (d) setQuota(Math.min(d.default_quota_mb, maxMb)); }} aria-label="Domain">
                 {domains.map((d) => (
                   <option key={d.id} value={d.id}>{d.name}</option>
                 ))}
@@ -207,8 +219,8 @@ function MailboxForm({ domains, mailbox, onClose, onSaved }: { domains: Domain[]
             </Button>
           </div>
         </Field>
-        <Field label="Quota (MB)">
-          <Input type="number" min={1} value={quota} onChange={(e) => setQuota(e.target.value)} required />
+        <Field label="Storage">
+          <QuotaPicker valueMb={quota} onChange={setQuota} maxMb={maxMb} availableMb={available} domainName={domain?.name} limitMb={domain?.storage_limit_mb} />
         </Field>
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>
