@@ -17,12 +17,13 @@ EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]{1,64}@([A-Za-z0-9-]+\.)+[A-Za-z]{2,63}
 COMMON_PASSWORDS = {
     "password", "password1", "password123", "12345678", "123456789", "1234567890", "qwerty123", "qwertyuiop",
     "iloveyou", "admin123", "administrator", "welcome1", "welcome123", "letmein1", "11111111", "00000000",
-    "abc12345", "passw0rd", "p@ssw0rd", "changeme", "football", "baseball", "sunshine", "princess",
+    "abc12345", "passw0rd", "123456", "1234567", "654321", "123123", "111111", "000000",
+    "qwerty", "abc123", "admin1", "admin12", "pass123", "secret", "mailsomadhan", "p@ssw0rd", "changeme", "football", "baseball", "sunshine", "princess",
 }
 
 
 def check_password_rules(password: str, admin: bool = False) -> str | None:
-    minimum = 12 if admin else 8
+    minimum = 6
     if len(password) < minimum:
         return f"Password must be at least {minimum} characters"
     if len(password.encode()) > 72:

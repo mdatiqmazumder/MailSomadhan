@@ -51,7 +51,7 @@ Subjects and addresses written by outsiders (for example `=HYPERLINK(...)`) were
 **Fix:** such cells are prefixed so they are shown as text.
 
 ### L-1 · Weak passwords accepted
-**Fix:** console accounts need 12 characters, mailboxes 8; very common passwords and passwords with fewer than 4 different characters are refused.
+**Fix:** passwords need at least 6 characters; very common passwords and passwords with fewer than 4 different characters are refused.
 
 ### L-2 · Console reachable from anywhere
 **Fix (optional):** Settings → Console security → "Allow console sign-in only from" accepts IP addresses and networks. Saving a list that would lock you out is refused; `sudo mailsomadhan open-console` removes the list in an emergency. Webmail is not affected.

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 import { Button, Card, Field, Input, toast } from "@/components/ui";
 
-export function PasswordCard({ minLength = 8 }: { minLength?: number }) {
+export function PasswordCard({ minLength = 6 }: { minLength?: number }) {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");

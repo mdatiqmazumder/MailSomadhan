@@ -156,9 +156,9 @@ function AdminForm({ row, self, data, domains, onClose, onSaved }: {
           <Field label="Contact email" hint="Optional.">
             <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
           </Field>
-          <Field label={row ? "New password" : "Password"} hint={row ? "Leave empty to keep it. Changing it signs the user out." : "At least 12 characters."}>
+          <Field label={row ? "New password" : "Password"} hint={row ? "Leave empty to keep it. Changing it signs the user out." : "At least 6 characters."}>
             <div className="flex gap-2">
-              <Input value={password} onChange={(e) => setPassword(e.target.value)} required={!row} minLength={12} autoComplete="off" className="font-mono" />
+              <Input value={password} onChange={(e) => setPassword(e.target.value)} required={!row} minLength={6} autoComplete="off" className="font-mono" />
               <Button onClick={() => setPassword(randomPassword())}><KeyRound className="h-4 w-4" /></Button>
             </div>
           </Field>

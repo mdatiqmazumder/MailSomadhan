@@ -215,9 +215,9 @@ function MailboxForm({ domains, mailbox, maxMb, onClose, onSaved }: { domains: D
         {canEdit && <Field label="Display name">
           <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Full name shown to recipients" />
         </Field>}
-        {canPassword && <Field label={mailbox ? "New password" : "Password"} hint={mailbox ? "Leave empty to keep the current password." : "At least 8 characters."}>
+        {canPassword && <Field label={mailbox ? "New password" : "Password"} hint={mailbox ? "Leave empty to keep the current password." : "At least 6 characters."}>
           <div className="flex gap-2">
-            <Input value={password} onChange={(e) => setPassword(e.target.value)} required={!mailbox} minLength={8} autoComplete="off" className="font-mono" />
+            <Input value={password} onChange={(e) => setPassword(e.target.value)} required={!mailbox} minLength={6} autoComplete="off" className="font-mono" />
             <Button onClick={() => setPassword(randomPassword())} title="Generate a password">
               <KeyRound className="h-4 w-4" /> Generate
             </Button>

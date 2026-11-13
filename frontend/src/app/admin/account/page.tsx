@@ -52,7 +52,7 @@ export default function AccountPage() {
           </Card>
         </div>
         <div className="space-y-5">
-          <PasswordCard minLength={12} />
+          <PasswordCard minLength={6} />
           <Card title="Sessions" padded>
             <p className="mb-3 text-sm text-muted">Sessions end automatically after 12 hours. Changing your password also signs out every other session.</p>
             <Button onClick={signOutEverywhere}><LogOut className="h-4 w-4" /> Sign out everywhere else</Button>
