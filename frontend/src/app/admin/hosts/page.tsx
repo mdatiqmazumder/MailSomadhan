@@ -4,6 +4,7 @@ import { Cloud, FileText, Globe, Plus, ShieldCheck, Trash2 } from "lucide-react"
 import { useEffect, useState } from "react";
 import { api, formatDate, useLoad } from "@/lib/api";
 import { Badge, Button, Card, CopyText, Field, IconButton, Input, Modal, PageHeader, Spinner, Table, toast, confirmDialog } from "@/components/ui";
+import { CloudflareConnect } from "@/components/CloudflareConnect";
 
 type Host = {
   id: number;
@@ -178,21 +179,7 @@ function IssueModal({ host, info, onClose, onStarted, onInfo }: {
   host: Host; info: TlsInfo; onClose: () => void; onStarted: (t: TlsInfo) => void; onInfo: (t: TlsInfo) => void;
 }) {
   const [method, setMethod] = useState<Method>(info.http_port === 80 ? "http" : info.cloudflare.configured ? "cloudflare" : "dns");
-  const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
-
-  async function saveToken() {
-    setBusy(true);
-    try {
-      onInfo(await api<TlsInfo>("/admin/tls/cloudflare", { method: "PUT", json: { token } }));
-      setToken("");
-      toast.ok("Cloudflare token saved");
-    } catch (err) {
-      toast.error((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function removeToken() {
     if (!(await confirmDialog({ title: "Remove the Cloudflare token?", danger: true }))) return;
@@ -271,15 +258,8 @@ function IssueModal({ host, info, onClose, onStarted, onInfo }: {
               </div>
             ) : (
               <>
-                <ol className="list-decimal space-y-1 pl-5 text-muted">
-                  <li>In Cloudflare open My Profile → API Tokens → Create Token.</li>
-                  <li>Use the &ldquo;Edit zone DNS&rdquo; template and limit it to the zone of {host.hostname}.</li>
-                  <li>Paste the token here. It is stored root-only on the server and never shown again.</li>
-                </ol>
-                <div className="flex gap-2">
-                  <Input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Cloudflare API token" autoComplete="off" className="font-mono" />
-                  <Button onClick={saveToken} loading={busy} disabled={token.trim().length < 30}>Save</Button>
-                </div>
+                <p className="text-muted">Connect Cloudflare once; the same connection also sets up DNS records for your mail domains.</p>
+                <CloudflareConnect status={{ configured: false, hint: "", zones: [] }} onChange={async () => onInfo(await api<TlsInfo>("/admin/tls/job"))} />
               </>
             )}
           </div>

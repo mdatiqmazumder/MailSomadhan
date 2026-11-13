@@ -8,7 +8,7 @@ from .db import Base, SessionLocal, engine
 from .models import AuditLog
 from .security import COOKIE_NAME, read_token
 from .migrate import migrate
-from .routers import admin, admins, analytics, auth, backup, campaigns, filters, mail, system, tls
+from .routers import admin, admins, analytics, auth, backup, campaigns, cloudflare, filters, mail, system, tls
 
 
 @asynccontextmanager
@@ -113,6 +113,7 @@ app.include_router(campaigns.admin_router, prefix="/api/admin")
 app.include_router(campaigns.public_router, prefix="/api")
 app.include_router(admins.router, prefix="/api/admin")
 app.include_router(tls.router, prefix="/api/admin")
+app.include_router(cloudflare.router, prefix="/api/admin")
 
 
 @app.get("/api/health")

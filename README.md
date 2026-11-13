@@ -35,7 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/mdatiqmazumder/MailSomadhan/main/in
 | Campaigns | Oversee users' individual sending, approve large campaigns, set daily and per-domain limits, manage the do-not-send list |
 | Mail filters | Block or trust senders and domains, block IP ranges and attachment types |
 | Backups | Encrypted, scheduled backups to Google Drive (see [docs/BACKUP.md](docs/BACKUP.md)) |
-| Domains | Add any number of domains; shows the MX, SPF, DKIM and DMARC records to publish and checks them live; DKIM key rotation; a storage pool shared by its mailboxes |
+| Domains | Add any number of domains; shows the MX, SPF, DKIM and DMARC records to publish and checks them live, or creates them automatically on Cloudflare after a one-time connection; DKIM key rotation; a storage pool shared by its mailboxes |
 | Mailboxes | Create users, set each mailbox's storage (never unlimited, never above the server maximum or the domain's pool), see real usage, reset passwords, disable accounts |
 | Aliases | Forwarding addresses and catch-alls |
 | Hosts & TLS | Extra hostnames for the panel, SMTP and IMAP, each with its own Let's Encrypt certificate (SNI) |
@@ -60,7 +60,22 @@ sudo mailsomadhan status                 # state of every service
 sudo mailsomadhan reset-admin-password   # new admin password
 sudo mailsomadhan update                 # pull the latest version and re-apply
 sudo mailsomadhan logs                   # recent logs
+sudo mailsomadhan uninstall              # remove MailSomadhan (see below)
 ```
+
+### Uninstalling
+
+```bash
+sudo mailsomadhan uninstall
+```
+
+It asks you to type the mail hostname to confirm, then removes the panel, API, services, management commands, the panel's Let's Encrypt certificates and the MailSomadhan configuration of Postfix, Dovecot, Rspamd, nginx and fail2ban, and closes the mail ports in ufw. By default the mail in `/var/vmail`, the `mailsomadhan` PostgreSQL database and the DKIM keys stay on the server, and the configuration and secrets (including the backup passphrase) are saved to `/root/mailsomadhan-saved-<date>.tar.gz`. Other websites, PostgreSQL, nginx, Redis and Node.js are never removed.
+
+| Option | Effect |
+| --- | --- |
+| `--purge` | Also delete all mail, the database, DKIM keys and secrets. Cannot be undone. |
+| `--remove-packages` | Also remove the Postfix, Dovecot and Rspamd packages |
+| `--yes` | Skip the confirmation (for scripts) |
 
 Files: application in `/opt/mailsomadhan`, configuration and secrets in `/etc/mailsomadhan`, mail in `/var/vmail`, install log in `/var/log/mailsomadhan-install.log`.
 

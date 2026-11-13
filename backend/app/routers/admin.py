@@ -12,6 +12,7 @@ from ..db import get_db
 from ..deps import AdminCtx, client_ip, parse_networks, require_admin, require_perm
 from ..models import Admin, Alias, Domain, Host, Mailbox, Relay, Setting
 from ..quota import allocated_mb, check_mailbox_quota, gb, max_mailbox_mb, usage_kb
+from .cloudflare import publish_dkim
 from ..security import DOMAIN_RE, EMAIL_RE, LOCAL_RE, check_password_rules, hash_password
 from ..system import (DEFAULT_SETTINGS, disk_usage, dns_records, generate_dkim, get_setting,
                       get_settings_map, mail_queue, remove_dkim, run_helper, service_status,
@@ -167,7 +168,9 @@ def rotate_dkim(domain_id: int, db: Session = Depends(get_db)):
     generate_dkim(domain)
     db.commit()
     write_selector_map(db)
-    return {"domain": domain.name, "records": dns_records(domain, _primary_host(db), check=False)}
+    # With Cloudflare connected, the new key is published right away.
+    cloudflare = publish_dkim(db, domain)
+    return {"domain": domain.name, "records": dns_records(domain, _primary_host(db), check=False), "cloudflare": cloudflare}
 
 
 # ---------------------------------------------------------------- mailboxes

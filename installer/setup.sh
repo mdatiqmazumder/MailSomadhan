@@ -697,6 +697,7 @@ EOF
 # --------------------------------------------------------------------------- helper, services, nginx
 step "Installing services"
 install -m 755 "$SRC_DIR/installer/mailsomadhan-helper" /usr/local/sbin/mailsomadhan-helper
+install -m 700 "$SRC_DIR/installer/mailsomadhan-cloudflare" /usr/local/sbin/mailsomadhan-cloudflare
 install -m 755 "$SRC_DIR/installer/mailsomadhan" /usr/local/bin/mailsomadhan
 echo 'mailsomadhan ALL=(root) NOPASSWD: /usr/local/sbin/mailsomadhan-helper' > /etc/sudoers.d/mailsomadhan
 chmod 440 /etc/sudoers.d/mailsomadhan

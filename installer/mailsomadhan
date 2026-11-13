@@ -61,6 +61,11 @@ case "${1:-help}" in
     fi
     cat /var/lib/mailsomadhan/update-result.json; echo
     ;;
+  uninstall)
+    need_root uninstall
+    shift
+    exec bash "$SRC_DIR/installer/uninstall.sh" "$@"
+    ;;
   *)
     cat <<EOF
 Usage: mailsomadhan <command>
@@ -72,6 +77,8 @@ Usage: mailsomadhan <command>
   reset-admin-password   generate a new password for the admin user
   open-console           remove the console IP allowlist (if you locked yourself out)
   update                 pull the latest version and re-apply the installation
+  uninstall [--purge] [--remove-packages] [--yes]
+                         remove MailSomadhan; mail and the database are kept unless --purge
 EOF
     ;;
 esac

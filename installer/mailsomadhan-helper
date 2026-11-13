@@ -641,10 +641,26 @@ case "$cmd" in
     # Token on stdin (never on the command line). Needs the "Edit zone DNS" permission.
     token="$(head -c 300 | tr -d '[:space:]')"
     [[ "$token" =~ ^[A-Za-z0-9_-]{30,200}$ ]] || die "this does not look like a Cloudflare API token"
+    zones="$(printf '%s' "$token" | python3 /usr/local/sbin/mailsomadhan-cloudflare verify)" || exit 1
     ( umask 077; printf 'dns_cloudflare_api_token = %s\n' "$token" > "$CF_INI" )
-    printf '{"configured": true, "hint": "%s", "time": "%s"}\n' "…${token: -4}" "$(date -Is)" > "$CF_STATE"
-    chmod 644 "$CF_STATE"
+    python3 - "$CF_STATE" "…${token: -4}" "$zones" <<'PY'
+import datetime, json, os, sys
+path, hint, zones = sys.argv[1:4]
+data = {"configured": True, "hint": hint, "zones": json.loads(zones).get("zones", []),
+        "time": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+with open(path + ".tmp", "w") as fh:
+    json.dump(data, fh)
+os.chmod(path + ".tmp", 0o644)
+os.replace(path + ".tmp", path)
+PY
     echo "saved"
+    ;;
+  cf-dns-lookup|cf-dns-apply)
+    # cf-dns-lookup|cf-dns-apply <domain> <dkim selector>; apply reads the change list on stdin.
+    domain="${1:-}"; selector="${2:-}"
+    valid_host "$domain" && [[ "$selector" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || die "invalid arguments"
+    [ -s "$CF_INI" ] || die "connect Cloudflare first"
+    exec python3 /usr/local/sbin/mailsomadhan-cloudflare "${cmd#cf-dns-}" "$domain" "$selector"
     ;;
   tls-cloudflare-remove)
     rm -f "$CF_INI" "$CF_STATE"

@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Cloudflare DNS client for MailSomadhan, run as root through mailsomadhan-helper.
+
+The API token (/etc/mailsomadhan/cloudflare.ini) is readable by root only, so the panel never
+sees it. The panel describes the changes it wants; this script accepts only the mail records
+MailSomadhan publishes (MX, SPF, DKIM, DMARC) for the named domain and refuses everything else,
+so a compromised panel cannot use the token to rewrite arbitrary DNS records.
+
+  mailsomadhan-cloudflare verify                       token on stdin; checks it with Cloudflare
+  mailsomadhan-cloudflare lookup <domain> <selector>   zone and current mail records (JSON)
+  mailsomadhan-cloudflare apply <domain> <selector>    JSON list of changes on stdin
+"""
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+API = os.environ.get("MAILSOMADHAN_CF_API", "https://api.cloudflare.com/client/v4")
+TOKEN_FILE = os.environ.get("MAILSOMADHAN_CF_INI", "/etc/mailsomadhan/cloudflare.ini")
+HELPER_CONF = os.environ.get("MAILSOMADHAN_HELPER_CONF", "/etc/mailsomadhan/helper.conf")
+HOSTS_FILE = os.environ.get("MAILSOMADHAN_HOSTS_FILE", "/var/lib/mailsomadhan/hosts.txt")
+
+HOST_RE = re.compile(r"^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+SELECTOR_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{30,200}$")
+ID_RE = re.compile(r"^[0-9a-f]{32}$")
+TXT_RE = re.compile(r"^[\x20-\x7e]{1,4000}$")
+
+
+def die(msg: str) -> None:
+    print(f"error: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def read_token() -> str:
+    try:
+        text = open(TOKEN_FILE).read()
+    except OSError:
+        die("no Cloudflare API token saved")
+    m = re.search(r"dns_cloudflare_api_token\s*=\s*(\S+)", text)
+    if not m or not TOKEN_RE.match(m.group(1)):
+        die("the saved Cloudflare token is not valid")
+    return m.group(1)
+
+
+def call(token: str, method: str, path: str, params: dict | None = None, body: dict | None = None) -> dict:
+    url = API + path
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers={
+        "Authorization": f"Bearer {token}", "Content-Type": "application/json",
+        "User-Agent": "MailSomadhan"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            out = json.load(resp)
+    except urllib.error.HTTPError as exc:
+        try:
+            out = json.load(exc)
+        except ValueError:
+            die(f"Cloudflare answered HTTP {exc.code}")
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        die(f"could not reach Cloudflare: {exc}")
+    if not out.get("success"):
+        errors = "; ".join(f"{e.get('message', '')} ({e.get('code', '')})" for e in out.get("errors") or [])
+        if any(e.get("code") in (9109, 10000, 6003, 9106) for e in out.get("errors") or []):
+            die("Cloudflare refused the token (it is invalid, expired, or lacks the DNS edit permission)")
+        die(f"Cloudflare error: {errors or 'unknown'}")
+    return out
+
+
+def allowed_mx_targets() -> set[str]:
+    targets = set()
+    try:
+        m = re.search(r"^MAIL_HOSTNAME='?([^'\n]+)'?", open(HELPER_CONF).read(), re.M)
+        if m:
+            targets.add(m.group(1).strip().lower())
+    except OSError:
+        pass
+    try:
+        for line in open(HOSTS_FILE).read().splitlines()[:500]:
+            line = line.strip().lower()
+            if HOST_RE.match(line):
+                targets.add(line)
+    except OSError:
+        pass
+    return targets
+
+
+def find_zone(token: str, domain: str) -> dict:
+    labels = domain.split(".")
+    for i in range(len(labels) - 1):
+        name = ".".join(labels[i:])
+        res = call(token, "GET", "/zones", {"name": name, "status": "active"})
+        if res.get("result"):
+            z = res["result"][0]
+            return {"id": z["id"], "name": z["name"]}
+    die(f"{domain} is not in this Cloudflare account, or the token is not allowed to edit its zone")
+
+
+def names(domain: str, selector: str) -> dict:
+    return {"apex": domain, "dmarc": f"_dmarc.{domain}", "dkim": f"{selector}._domainkey.{domain}"}
+
+
+def unquote(content: str) -> str:
+    """Cloudflare may return TXT content quoted and split into 255-character strings."""
+    content = content.strip()
+    if content.startswith('"') and content.endswith('"'):
+        return "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', content)).replace('\\"', '"')
+    return content
+
+
+def lookup(token: str, zone: dict, domain: str, selector: str) -> list[dict]:
+    n = names(domain, selector)
+    records = []
+    for rtype, name in (("MX", n["apex"]), ("TXT", n["apex"]), ("TXT", n["dmarc"]), ("TXT", n["dkim"])):
+        res = call(token, "GET", f"/zones/{zone['id']}/dns_records", {"type": rtype, "name": name, "per_page": 100})
+        for r in res.get("result") or []:
+            records.append({"id": r["id"], "type": r["type"], "name": r["name"].lower(),
+                            "content": unquote(r["content"]) if r["type"] == "TXT" else r["content"].rstrip(".").lower(),
+                            "priority": r.get("priority")})
+    return records
+
+
+def check_record(rtype: str, name: str, content: str, n: dict, mx_targets: set[str]) -> None:
+    """Only the four mail records, with the shape MailSomadhan publishes."""
+    if rtype == "MX":
+        if name != n["apex"]:
+            die("MX records may only be set on the domain itself")
+        if content.rstrip(".").lower() not in mx_targets:
+            die("MX records may only point to this server's hostnames")
+        return
+    if rtype != "TXT" or not TXT_RE.match(content):
+        die("only MX and TXT mail records can be changed")
+    prefix = {n["apex"]: "v=spf1", n["dmarc"]: "v=dmarc1", n["dkim"]: "v=dkim1"}.get(name)
+    if not prefix:
+        die(f"{name} is not a mail record of this domain")
+    if not content.lower().startswith(prefix):
+        die(f"the record at {name} must start with {prefix}")
+
+
+def apply(token: str, zone: dict, domain: str, selector: str, changes: list) -> list[str]:
+    n = names(domain, selector)
+    mx_targets = allowed_mx_targets()
+    existing = {r["id"]: r for r in lookup(token, zone, domain, selector)}
+    if not isinstance(changes, list) or len(changes) > 20:
+        die("invalid change list")
+    # Validate everything before touching anything.
+    for c in changes:
+        op = c.get("op")
+        if op in ("update", "delete"):
+            if not ID_RE.match(str(c.get("id", ""))) or c["id"] not in existing:
+                die("unknown record")
+            cur = existing[c["id"]]
+            if op == "delete" and not (cur["type"] == "MX" or cur["content"].lower().startswith("v=spf1")):
+                die("only MX and SPF records can be removed")
+            if op == "update" and cur["type"] != c.get("type"):
+                die("a record cannot change its type")
+        elif op != "create":
+            die("invalid operation")
+        if op in ("create", "update"):
+            check_record(str(c.get("type")), str(c.get("name", "")).lower(), str(c.get("content", "")), n, mx_targets)
+    done = []
+    base = f"/zones/{zone['id']}/dns_records"
+    for c in changes:
+        if c["op"] == "delete":
+            call(token, "DELETE", f"{base}/{c['id']}")
+            done.append(f"removed {existing[c['id']]['type']} {existing[c['id']]['name']}")
+            continue
+        body = {"type": c["type"], "name": c["name"].lower(), "content": c["content"], "ttl": 1, "proxied": False,
+                "comment": "MailSomadhan"}
+        if c["type"] == "MX":
+            body["priority"] = 10
+        if c["op"] == "create":
+            call(token, "POST", base, body=body)
+        else:
+            call(token, "PUT", f"{base}/{c['id']}", body=body)
+        done.append(f"{c['op']}d {c['type']} {c['name']}")
+    return done
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    if args == ["verify"]:
+        token = sys.stdin.read(300).strip()
+        if not TOKEN_RE.match(token):
+            die("this does not look like a Cloudflare API token")
+        res = call(token, "GET", "/user/tokens/verify")
+        if (res.get("result") or {}).get("status") != "active":
+            die("this Cloudflare token is not active")
+        zones = sorted(z["name"] for z in call(token, "GET", "/zones", {"per_page": 50}).get("result") or [])
+        if not zones:
+            die("this token cannot see any domain (zone); give it the Zone Read and DNS Edit permissions")
+        print(json.dumps({"zones": zones}))
+        return
+    if len(args) != 3 or args[0] not in ("lookup", "apply"):
+        die("usage: lookup|apply <domain> <selector>")
+    cmd, domain, selector = args[0], args[1].lower(), args[2].lower()
+    if len(domain) > 253 or not HOST_RE.match(domain) or not SELECTOR_RE.match(selector):
+        die("invalid domain or selector")
+    token = read_token()
+    zone = find_zone(token, domain)
+    if cmd == "lookup":
+        print(json.dumps({"zone": zone, "records": lookup(token, zone, domain, selector)}))
+    else:
+        try:
+            changes = json.loads(sys.stdin.read(200_000))
+        except ValueError:
+            die("invalid change list")
+        print(json.dumps({"zone": zone, "done": apply(token, zone, domain, selector, changes)}))
+
+
+if __name__ == "__main__":
+    main()

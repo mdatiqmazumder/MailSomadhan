@@ -1,11 +1,12 @@
 "use client";
 
-import { CheckCircle2, CircleAlert, HardDrive, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { CheckCircle2, CircleAlert, Cloud, HardDrive, KeyRound, Plus, RefreshCw, Trash2, Wand2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { api, useLoad } from "@/lib/api";
 import { useAdmin } from "@/lib/admin";
 import { formatMb } from "@/components/Storage";
-import { Badge, Button, Card, CopyText, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Toggle, toast, confirmDialog } from "@/components/ui";
+import { Badge, Button, Card, Checkbox, CopyText, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Toggle, toast, confirmDialog } from "@/components/ui";
+import { CloudflareConnect, type CloudflareStatus } from "@/components/CloudflareConnect";
 
 type Domain = {
   id: number;
@@ -21,6 +22,16 @@ type Domain = {
 };
 type Relay = { id: number; name: string };
 type DnsRecord = { purpose: string; type: string; host: string; value: string; ok?: boolean; found?: string[] };
+type PlanEntry = {
+  purpose: string;
+  status: "ok" | "create" | "update" | "replace" | "kept";
+  summary: string;
+  current: string[];
+  selected: boolean;
+  record: { type: string; name: string; content: string };
+  changes: unknown[];
+};
+type Plan = { zone: string; records: PlanEntry[]; done?: string[] };
 
 export default function DomainsPage() {
   const { isSuper, can } = useAdmin();
@@ -170,8 +181,11 @@ function DnsModal({ domain, onClose }: { domain: Domain; onClose: () => void }) 
   async function rotate() {
     if (!(await confirmDialog({ title: "Generate a new DKIM key? Mail is signed with the new key immediately, so publish the new DNS record right away.", danger: true }))) return;
     try {
-      setData(await api(`/admin/domains/${domain.id}/dkim/rotate`, { method: "POST" }));
-      toast.ok("New DKIM key generated");
+      const res = await api<{ records: DnsRecord[]; cloudflare: string }>(`/admin/domains/${domain.id}/dkim/rotate`, { method: "POST" });
+      setData(res);
+      if (res.cloudflare === "published") toast.ok("New DKIM key generated and published on Cloudflare");
+      else if (res.cloudflare) toast.error(`New DKIM key generated, but Cloudflare was not updated: ${res.cloudflare.replace(/^failed: /, "")}`);
+      else toast.ok("New DKIM key generated");
     } catch (err) {
       toast.error((err as Error).message);
     }
@@ -179,6 +193,7 @@ function DnsModal({ domain, onClose }: { domain: Domain; onClose: () => void }) 
 
   return (
     <Modal title={`DNS records for ${domain.name}`} onClose={onClose} wide>
+      {isSuperAdmin && <CloudflareSetup domain={domain} onApplied={recheck} />}
       <p className="mb-4 text-sm text-muted">
         Create these records at your DNS provider so other mail servers accept and trust mail from this domain. Changes can take a while to propagate.
       </p>
@@ -215,6 +230,149 @@ function DnsModal({ domain, onClose }: { domain: Domain; onClose: () => void }) 
         </Button>
       </div>
     </Modal>
+  );
+}
+
+const PLAN_BADGE: Record<PlanEntry["status"], { tone: "ok" | "accent" | "warn" | "muted"; label: string }> = {
+  ok: { tone: "ok", label: "In place" },
+  kept: { tone: "muted", label: "Kept" },
+  create: { tone: "accent", label: "Will be added" },
+  update: { tone: "accent", label: "Will be updated" },
+  replace: { tone: "warn", label: "Needs your OK" },
+};
+
+/** One-click DNS: connect Cloudflare once, then create this domain's mail records automatically. */
+function CloudflareSetup({ domain, onApplied }: { domain: Domain; onApplied: () => void }) {
+  const [cf, setCf] = useState<CloudflareStatus | null>(null);
+  const [open, setOpen] = useState(false);
+  const [plan, setPlan] = useState<Plan | null>(null);
+  const [planError, setPlanError] = useState("");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [loadingPlan, setLoadingPlan] = useState(false);
+  const [applying, setApplying] = useState(false);
+
+  useEffect(() => {
+    api<CloudflareStatus>("/admin/cloudflare").then(setCf).catch(() => setCf(null));
+  }, []);
+
+  const loadPlan = useCallback(async () => {
+    setLoadingPlan(true);
+    setPlanError("");
+    try {
+      const p = await api<Plan>(`/admin/domains/${domain.id}/cloudflare`);
+      setPlan(p);
+      setPicked(new Set(p.records.filter((r) => r.selected).map((r) => r.purpose)));
+    } catch (err) {
+      setPlan(null);
+      setPlanError((err as Error).message);
+    } finally {
+      setLoadingPlan(false);
+    }
+  }, [domain.id]);
+
+  useEffect(() => {
+    if (cf?.configured) loadPlan();
+  }, [cf?.configured, loadPlan]);
+
+  async function apply() {
+    setApplying(true);
+    try {
+      const p = await api<Plan>(`/admin/domains/${domain.id}/cloudflare`, { json: { purposes: [...picked] } });
+      setPlan(p);
+      setPicked(new Set(p.records.filter((r) => r.selected).map((r) => r.purpose)));
+      toast.ok(p.done?.length ? `Cloudflare updated (${p.done.length} change${p.done.length === 1 ? "" : "s"})` : "Nothing to change");
+      setTimeout(onApplied, 1500);
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  if (!cf) return null;
+
+  if (!cf.configured) {
+    return (
+      <div className="mb-4 rounded-lg border border-accent/25 bg-accent-soft p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-start gap-2 text-sm">
+            <Cloud className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
+            <div>
+              <p className="font-medium">Is {domain.name} on Cloudflare?</p>
+              <p className="text-text-2">Connect Cloudflare once and these records are created for you.</p>
+            </div>
+          </div>
+          {!open && <Button size="sm" variant="primary" onClick={() => setOpen(true)}>Set up automatically</Button>}
+        </div>
+        {open && <div className="mt-3 border-t border-accent/20 pt-3"><CloudflareConnect status={cf} onChange={setCf} /></div>}
+      </div>
+    );
+  }
+
+  const pending = plan?.records.filter((r) => r.changes.length > 0) ?? [];
+  return (
+    <div className="mb-4 rounded-lg border border-border p-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <p className="flex items-center gap-2 text-sm font-medium">
+          <Cloud className="h-4 w-4 text-accent" /> Automatic setup with Cloudflare
+          {plan && <span className="font-normal text-muted">· zone {plan.zone}</span>}
+        </p>
+        <Button size="sm" variant="ghost" onClick={loadPlan} loading={loadingPlan}>{!loadingPlan && <RefreshCw className="h-3.5 w-3.5" />} Refresh</Button>
+      </div>
+      {planError ? (
+        <div className="space-y-2 text-sm">
+          <p className="text-danger">{planError}</p>
+          <CloudflareConnect status={cf} onChange={setCf} />
+        </div>
+      ) : !plan ? (
+        <Spinner />
+      ) : (
+        <>
+          <ul className="divide-y divide-border">
+            {plan.records.map((r) => {
+              const badge = PLAN_BADGE[r.status];
+              const selectable = r.changes.length > 0;
+              return (
+                <li key={r.purpose} className="flex items-start gap-3 py-2 text-sm">
+                  {selectable ? (
+                    <Checkbox
+                      className="mt-0.5"
+                      label={`Apply ${r.purpose}`}
+                      checked={picked.has(r.purpose)}
+                      onChange={(v) => setPicked((s) => { const n = new Set(s); if (v) n.add(r.purpose); else n.delete(r.purpose); return n; })}
+                    />
+                  ) : (
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-ok" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{r.purpose}</span>
+                      <Badge tone={badge.tone}>{badge.label}</Badge>
+                    </div>
+                    <p className="text-text-2">{r.summary}</p>
+                    {r.status !== "ok" && r.status !== "kept" && r.current.length > 0 && r.purpose !== "DKIM" && (
+                      <p className="mt-1 text-xs text-muted break-all">Now: {r.current.join(" · ")}</p>
+                    )}
+                    {(r.status === "update" || r.status === "replace") && r.purpose !== "DKIM" && (
+                      <p className="mt-0.5 text-xs text-muted break-all">New: {r.record.content}</p>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          {pending.length > 0 ? (
+            <div className="mt-2 flex justify-end">
+              <Button variant="primary" onClick={apply} loading={applying} disabled={picked.size === 0}>
+                {!applying && <Wand2 className="h-4 w-4" />} Apply {picked.size} change{picked.size === 1 ? "" : "s"}
+              </Button>
+            </div>
+          ) : (
+            <p className="mt-1 text-xs text-muted">Everything is in place on Cloudflare. Other mail servers may take a few minutes to see new records.</p>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
