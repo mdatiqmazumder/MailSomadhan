@@ -1,0 +1,11 @@
+node_modules/
+.next/
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.db
+.env
+.env.local
+backend/devdata/
+.claude/

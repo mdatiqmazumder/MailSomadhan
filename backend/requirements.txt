@@ -1,0 +1,11 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30
+sqlalchemy>=2.0.30,<3
+psycopg[binary]>=3.2
+pydantic-settings>=2.3
+bcrypt>=4.1
+pyjwt>=2.8
+python-multipart>=0.0.9
+cryptography>=42
+dnspython>=2.6
+nh3>=0.2.17
