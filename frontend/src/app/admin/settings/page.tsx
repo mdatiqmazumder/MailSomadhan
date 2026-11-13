@@ -3,7 +3,7 @@
 import { HardDrive, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, formatBytes, useLoad } from "@/lib/api";
-import { formatMb } from "@/components/Storage";
+import { GbInput, UNLIMITED, fitsLimit, formatLimit, formatMb } from "@/components/Storage";
 import { Button, Card, Field, Input, Notice, PageHeader, PageSkeleton, Toggle, toast } from "@/components/ui";
 
 type Settings = {
@@ -20,20 +20,18 @@ type Settings = {
 };
 type Storage = { max_mailbox_mb: number; allocated_mb: number; used_kb: number; over_max: string[]; overcommitted: boolean; disk: { total: number; free: number } };
 
-const gbStr = (mb: string | number) => String(Math.round((Number(mb) / 1024) * 100) / 100);
-const toMb = (gb: string) => Math.round(Number(gb) * 1024);
 
 export default function SettingsPage() {
   const { data, loading } = useLoad<Settings>("/admin/settings");
   const storage = useLoad<Storage>("/admin/storage");
   const [form, setForm] = useState<Settings | null>(null);
-  const [gb, setGb] = useState({ max: "", def: "", domain: "" });
+  const [mb, setMb] = useState<{ max: number; def: number; domain: number } | null>(null);
   const [busy, setBusy] = useState<"" | "general" | "storage">("");
 
   useEffect(() => {
     if (!data) return;
     setForm(data);
-    setGb({ max: gbStr(data.max_mailbox_quota_mb), def: gbStr(data.default_quota_mb), domain: gbStr(data.default_domain_storage_mb) });
+    setMb({ max: Number(data.max_mailbox_quota_mb), def: Number(data.default_quota_mb), domain: Number(data.default_domain_storage_mb) });
   }, [data]);
 
   async function put(json: Record<string, unknown>, which: "general" | "storage") {
@@ -51,7 +49,8 @@ export default function SettingsPage() {
     }
   }
 
-  if (loading || !form) return <PageSkeleton />;
+  if (loading || !form || !mb) return <PageSkeleton />;
+  const defaultTooBig = !fitsLimit(mb.def, mb.max);
   const set = (key: keyof Settings) => (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [key]: e.target.value });
   const st = storage.data;
 
@@ -77,24 +76,28 @@ export default function SettingsPage() {
           </form>
         </Card>
 
-        <Card title="Mailbox storage" description="Every mailbox has a fixed size. There is no unlimited option." actions={<HardDrive className="h-4 w-4 text-muted" />}>
+        <Card title="Mailbox storage" description="Any limit can be a size in GB or unlimited." actions={<HardDrive className="h-4 w-4 text-muted" />}>
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              put({ max_mailbox_quota_mb: toMb(gb.max), default_quota_mb: toMb(gb.def), default_domain_storage_mb: toMb(gb.domain) }, "storage");
+              put({ max_mailbox_quota_mb: mb.max, default_quota_mb: mb.def, default_domain_storage_mb: mb.domain }, "storage");
             }}
             className="space-y-4 p-5"
           >
-            <Field label="Largest mailbox allowed (GB)" hint="No mailbox can be given more than this, on any domain.">
-              <Input type="number" min={0.5} step={0.5} max={1024} value={gb.max} onChange={(e) => setGb({ ...gb, max: e.target.value })} required />
+            <Field label="Largest mailbox allowed" hint="No mailbox can be given more than this, on any domain. Unlimited: no server maximum.">
+              <GbInput label="Largest mailbox allowed in GB" valueMb={mb.max} onChange={(v) => setMb({ ...mb, max: v })} />
             </Field>
-            <Field label="Default mailbox size (GB)" hint="Pre-filled when creating a mailbox on a new domain.">
-              <Input type="number" min={0.1} step={0.5} max={Number(gb.max) || undefined} value={gb.def} onChange={(e) => setGb({ ...gb, def: e.target.value })} required />
+            <Field
+              label="Default mailbox size"
+              hint="Pre-filled when creating a mailbox on a new domain."
+              error={defaultTooBig ? `At most ${formatLimit(mb.max)}, the largest mailbox allowed.` : undefined}
+            >
+              <GbInput label="Default mailbox size in GB" valueMb={mb.def} onChange={(v) => setMb({ ...mb, def: v })} allowUnlimited={mb.max === UNLIMITED} />
             </Field>
-            <Field label="Storage for a new domain (GB)" hint="The total its mailboxes may share. Change it per domain on the Domains page.">
-              <Input type="number" min={1} step={1} value={gb.domain} onChange={(e) => setGb({ ...gb, domain: e.target.value })} required />
+            <Field label="Storage for a new domain" hint="The total its mailboxes may share. Change it per domain on the Domains page.">
+              <GbInput label="Storage for a new domain in GB" valueMb={mb.domain} onChange={(v) => setMb({ ...mb, domain: v })} />
             </Field>
-            <Button type="submit" variant="primary" loading={busy === "storage"}>Save storage limits</Button>
+            <Button type="submit" variant="primary" loading={busy === "storage"} disabled={defaultTooBig}>Save storage limits</Button>
             {st && (
               <div className="space-y-3 border-t border-border pt-4 text-sm">
                 <p className="text-muted">

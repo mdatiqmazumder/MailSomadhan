@@ -373,7 +373,7 @@ EOF
 pgsql_map domains "SELECT 1 FROM domains WHERE name = '%s' AND active"
 pgsql_map mailboxes "SELECT 1 FROM mailboxes m JOIN domains d ON d.id = m.domain_id WHERE m.email = '%s' AND m.active AND d.active"
 pgsql_map aliases "SELECT email FROM mailboxes WHERE email = '%s' AND active UNION SELECT destination FROM aliases WHERE source = '%s' AND active"
-pgsql_map sender-login "SELECT email FROM mailboxes WHERE email = '%s' AND active UNION SELECT destination FROM aliases WHERE source = '%s' AND active"
+pgsql_map sender-login "SELECT email FROM mailboxes WHERE email = '%s' AND active UNION SELECT destination FROM aliases WHERE source = '%s' AND active AND source NOT LIKE '@%%'"
 # Outbound relay: a domain's own relay wins, otherwise the default relay (if any), otherwise direct delivery.
 pgsql_map relay-domain "SELECT '[' || r.host || ']:' || r.port FROM relays r JOIN domains d ON d.relay_id = r.id WHERE d.name = '%d' AND r.active LIMIT 1"
 pgsql_map relay-default "SELECT '[' || host || ']:' || port FROM relays WHERE is_default AND active AND '%s' <> '' LIMIT 1"

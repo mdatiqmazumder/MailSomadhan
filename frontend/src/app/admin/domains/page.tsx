@@ -1,10 +1,11 @@
 "use client";
 
 import { CheckCircle2, CircleAlert, Cloud, HardDrive, KeyRound, Plus, RefreshCw, Trash2, Wand2 } from "lucide-react";
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { api, useLoad } from "@/lib/api";
 import { useAdmin } from "@/lib/admin";
-import { formatMb } from "@/components/Storage";
+import { GbInput, UNLIMITED, fitsLimit, formatLimit, formatMb, smallestLimit } from "@/components/Storage";
 import { Badge, Button, Card, Checkbox, CopyText, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Toggle, toast, confirmDialog } from "@/components/ui";
 import { CloudflareConnect, type CloudflareStatus } from "@/components/CloudflareConnect";
 
@@ -19,6 +20,7 @@ type Domain = {
   relay_id: number | null;
   relay_name: string | null;
   mailboxes: number;
+  catch_all: string | null;
 };
 type Relay = { id: number; name: string };
 type DnsRecord = { purpose: string; type: string; host: string; value: string; ok?: boolean; found?: string[] };
@@ -102,16 +104,23 @@ export default function DomainsPage() {
           <Table head={isSuper ? ["Domain", "Mailboxes", "Storage assigned", "Outbound relay", "Active", ""] : ["Domain", "Mailboxes", "Storage assigned", ""]} minWidth={isSuper ? 860 : 560}>
             {data.map((d) => (
               <tr key={d.id}>
-                <td className="font-medium">{d.name}</td>
+                <td>
+                  <span className="font-medium">{d.name}</span>
+                  {d.catch_all && (
+                    <Link href="/admin/aliases" className="mt-0.5 block max-w-64 truncate text-[11px] text-muted hover:text-accent" title={`Catch-all: every unknown address goes to ${d.catch_all}`}>
+                      Catch-all → {d.catch_all.split(",").join(", ")}
+                    </Link>
+                  )}
+                </td>
                 <td className="tabular-nums">{d.mailboxes}</td>
                 <td>
                   <button onClick={() => isSuper && setStorageFor(d)} className="block w-40 text-left" title={isSuper ? "Change storage limits" : undefined}>
                     <div className="mb-1 flex justify-between text-xs">
                       <span className="tabular">{formatMb(d.allocated_mb)}</span>
-                      <span className="text-muted tabular">of {formatMb(d.storage_limit_mb)}</span>
+                      <span className="text-muted tabular">{d.storage_limit_mb === UNLIMITED ? "Unlimited" : `of ${formatMb(d.storage_limit_mb)}`}</span>
                     </div>
                     <div className="h-1.5 overflow-hidden rounded-full bg-sunken">
-                      <div className={d.allocated_mb >= d.storage_limit_mb ? "h-full rounded-full bg-warn" : "h-full rounded-full bg-accent"} style={{ width: `${Math.min(100, (d.allocated_mb / Math.max(1, d.storage_limit_mb)) * 100)}%` }} />
+                      {d.storage_limit_mb !== UNLIMITED && <div className={d.allocated_mb >= d.storage_limit_mb ? "h-full rounded-full bg-warn" : "h-full rounded-full bg-accent"} style={{ width: `${Math.min(100, (d.allocated_mb / Math.max(1, d.storage_limit_mb)) * 100)}%` }} />}
                     </div>
                     <span className="mt-0.5 block text-[11px] text-muted">{(d.used_kb / 1024 / 1024).toFixed(d.used_kb > 1024 * 1024 * 10 ? 0 : 2)} GB actually used</span>
                   </button>
@@ -388,12 +397,13 @@ function Row({ label, value }: { label: string; value: string }) {
 
 function StorageModal({ domain, onClose, onSaved }: { domain: Domain; onClose: () => void; onSaved: () => void }) {
   const settings = useLoad<{ max_mailbox_quota_mb: string }>("/admin/settings");
-  const maxMb = Number(settings.data?.max_mailbox_quota_mb || 10240);
-  const [limitGb, setLimitGb] = useState(String(domain.storage_limit_mb / 1024));
-  const [defaultGb, setDefaultGb] = useState(String(domain.default_quota_mb / 1024));
+  const maxMb = Number(settings.data?.max_mailbox_quota_mb ?? 10240); // 0 = no server maximum
+  const [limitMb, setLimitMb] = useState(domain.storage_limit_mb);
+  const [defaultMb, setDefaultMb] = useState(domain.default_quota_mb);
   const [busy, setBusy] = useState(false);
-  const limitMb = Math.round(Number(limitGb) * 1024);
-  const defaultMb = Math.round(Number(defaultGb) * 1024);
+  const defaultCeiling = smallestLimit(maxMb, limitMb);
+  const tooSmall = limitMb !== UNLIMITED && limitMb < domain.allocated_mb;
+  const defaultTooBig = !fitsLimit(defaultMb, defaultCeiling);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -414,15 +424,23 @@ function StorageModal({ domain, onClose, onSaved }: { domain: Domain; onClose: (
         <div className="rounded-lg bg-raised px-3 py-2.5 text-sm">
           <b>{formatMb(domain.allocated_mb)}</b> assigned to {domain.mailboxes} mailbox{domain.mailboxes === 1 ? "" : "es"} · {(domain.used_kb / 1024 / 1024).toFixed(2)} GB actually used
         </div>
-        <Field label="Domain storage limit (GB)" hint={`Total that can be assigned to this domain's mailboxes. At least ${formatMb(domain.allocated_mb)} (already assigned).`}>
-          <Input type="number" min={Math.max(0.5, domain.allocated_mb / 1024)} step={1} value={limitGb} onChange={(e) => setLimitGb(e.target.value)} required />
+        <Field
+          label="Domain storage limit"
+          hint={`Total that can be assigned to this domain's mailboxes${domain.allocated_mb ? `; at least ${formatMb(domain.allocated_mb)} (already assigned)` : ""}. Unlimited: no total for the domain.`}
+          error={tooSmall ? `At least ${formatMb(domain.allocated_mb)} is already assigned to mailboxes.` : undefined}
+        >
+          <GbInput label="Domain storage limit in GB" valueMb={limitMb} onChange={setLimitMb} />
         </Field>
-        <Field label="Default size for new mailboxes (GB)" hint={`At most ${formatMb(Math.min(maxMb, limitMb || maxMb))}.`}>
-          <Input type="number" min={0.1} step={0.5} max={Math.min(maxMb, limitMb || maxMb) / 1024} value={defaultGb} onChange={(e) => setDefaultGb(e.target.value)} required />
+        <Field
+          label="Default size for new mailboxes"
+          hint={defaultCeiling === UNLIMITED ? "Any size, or unlimited." : `At most ${formatMb(defaultCeiling)}.`}
+          error={defaultTooBig ? `At most ${formatLimit(defaultCeiling)} is possible.` : undefined}
+        >
+          <GbInput label="Default mailbox size in GB" valueMb={defaultMb} onChange={setDefaultMb} allowUnlimited={defaultCeiling === UNLIMITED} />
         </Field>
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="primary" loading={busy}>Save</Button>
+          <Button type="submit" variant="primary" loading={busy} disabled={tooSmall || defaultTooBig}>Save</Button>
         </div>
       </form>
     </Modal>

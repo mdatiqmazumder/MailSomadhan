@@ -3,14 +3,17 @@
 import { ArrowRight, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, useLoad } from "@/lib/api";
-import { Badge, Button, Card, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Toggle, toast, confirmDialog } from "@/components/ui";
+import { CatchAllCard } from "@/components/CatchAll";
+import { Button, Card, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Toggle, toast, confirmDialog } from "@/components/ui";
 
 type Domain = { id: number; name: string };
 type Alias = { id: number; source: string; destination: string; active: boolean };
 
 export default function AliasesPage() {
   const domains = useLoad<Domain[]>("/admin/domains");
-  const { data, loading, reload } = useLoad<Alias[]>("/admin/aliases");
+  const all = useLoad<Alias[]>("/admin/aliases");
+  const { loading, reload } = all;
+  const data = all.data?.filter((a) => !a.source.startsWith("@")); // catch-alls have their own card
   const [adding, setAdding] = useState(false);
   const [local, setLocal] = useState("");
   const [domain, setDomain] = useState("");
@@ -58,14 +61,15 @@ export default function AliasesPage() {
     <>
       <PageHeader
         title="Aliases"
-        description="Forward an address to one or more mailboxes. Leave the name empty to catch all unknown addresses of a domain."
+        description="Forward an address to one or more mailboxes."
         action={
           <Button variant="primary" onClick={() => setAdding(true)} disabled={!domains.data?.length}>
             <Plus className="h-4 w-4" /> Add alias
           </Button>
         }
       />
-      <Card>
+      <CatchAllCard onChanged={reload} />
+      <Card title="Aliases">
         {loading ? (
           <div className="p-6"><Spinner /></div>
         ) : !data?.length ? (
@@ -74,15 +78,7 @@ export default function AliasesPage() {
           <Table head={["Address", "Delivers to", "Active", ""]}>
             {data.map((a) => (
               <tr key={a.id}>
-                <td className="font-medium whitespace-nowrap">
-                  {a.source.startsWith("@") ? (
-                    <>
-                      <Badge tone="accent">catch-all</Badge> <span className="ml-1">{a.source}</span>
-                    </>
-                  ) : (
-                    a.source
-                  )}
-                </td>
+                <td className="font-medium whitespace-nowrap">{a.source}</td>
                 <td>
                   <span className="flex items-start gap-1.5 text-muted">
                     <ArrowRight className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -108,9 +104,9 @@ export default function AliasesPage() {
       {adding && (
         <Modal title="Add alias" onClose={() => setAdding(false)}>
           <form onSubmit={add} className="space-y-4">
-            <Field label="Alias address" hint="Leave the name empty for a catch-all.">
+            <Field label="Alias address" hint="To receive mail for every unknown address of a domain, use Catch-all above.">
               <div className="flex items-center gap-1.5">
-                <Input autoFocus value={local} onChange={(e) => setLocal(e.target.value)} placeholder="info" />
+                <Input autoFocus value={local} onChange={(e) => setLocal(e.target.value)} placeholder="info" required />
                 <span className="text-muted">@</span>
                 <Select value={domain} onChange={(e) => setDomain(e.target.value)} aria-label="Domain">
                   {domains.data?.map((d) => (

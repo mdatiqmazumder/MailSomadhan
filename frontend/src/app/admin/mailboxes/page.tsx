@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { api, formatDate, useLoad } from "@/lib/api";
 import { useAdmin } from "@/lib/admin";
-import { QuotaPicker, UsageBar } from "@/components/Storage";
+import { QuotaPicker, UNLIMITED, UsageBar, fitsLimit, formatLimit, smallestLimit } from "@/components/Storage";
 import { ConnectionSettings, type Connection } from "@/components/ConnectionSettings";
 import { Avatar, Button, Card, Checkbox, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Toggle, toast, confirmDialog } from "@/components/ui";
 
@@ -30,7 +30,7 @@ function randomPassword() {
 export default function MailboxesPage() {
   const domains = useLoad<Domain[]>("/admin/domains");
   const { me, can } = useAdmin();
-  const maxMb = me?.max_mailbox_mb || 10240;
+  const maxMb = me?.max_mailbox_mb ?? 10240; // 0 = no server maximum
   const { data, loading, reload } = useLoad<Mailbox[]>("/admin/mailboxes");
   const [filter, setFilter] = useState("");
   const [domainFilter, setDomainFilter] = useState("");
@@ -112,7 +112,7 @@ export default function MailboxesPage() {
                 </td>
                 <td>
                   <UsageBar usedKb={m.used_kb} quotaMb={m.quota_mb} compact />
-                  {m.quota_mb > maxMb && <span className="mt-0.5 block text-[11px] text-warn">Above the {maxMb / 1024} GB maximum</span>}
+                  {!fitsLimit(m.quota_mb, maxMb) && <span className="mt-0.5 block text-[11px] text-warn">Above the {formatLimit(maxMb)} maximum</span>}
                 </td>
                 <td className="whitespace-nowrap text-muted">{m.last_login ? formatDate(m.last_login) : "Never"}</td>
                 <td>
@@ -165,15 +165,22 @@ export default function MailboxesPage() {
   );
 }
 
+/** The domain's default size, kept within the server maximum (0 = unlimited for both). */
+function defaultFor(d: Domain | undefined, maxMb: number): number {
+  if (!d) return smallestLimit(1024, maxMb);
+  return fitsLimit(d.default_quota_mb, maxMb) ? d.default_quota_mb : maxMb;
+}
+
 function MailboxForm({ domains, mailbox, maxMb, onClose, onSaved }: { domains: Domain[]; mailbox?: Mailbox; maxMb: number; onClose: () => void; onSaved: () => void }) {
   const [domainId, setDomainId] = useState(String(mailbox?.domain_id ?? domains[0]?.id ?? ""));
   const [local, setLocal] = useState("");
   const [displayName, setDisplayName] = useState(mailbox?.display_name ?? "");
   const [password, setPassword] = useState("");
-  const [quota, setQuota] = useState<number>(mailbox?.quota_mb ?? Math.min(domains[0]?.default_quota_mb ?? 1024, maxMb));
+  const [quota, setQuota] = useState<number>(mailbox?.quota_mb ?? defaultFor(domains[0], maxMb));
   const domain = domains.find((d) => d.id === Number(domainId));
   // Free pool of the domain; when editing, this mailbox's current quota is available to itself.
-  const available = domain ? domain.storage_limit_mb - domain.allocated_mb + (mailbox ? mailbox.quota_mb : 0) : maxMb;
+  // null = the domain has unlimited storage
+  const available = !domain || domain.storage_limit_mb === UNLIMITED ? null : domain.storage_limit_mb - domain.allocated_mb + (mailbox ? mailbox.quota_mb : 0);
   const [busy, setBusy] = useState(false);
   const [welcome, setWelcome] = useState(true);
   const { can } = useAdmin();
@@ -212,7 +219,7 @@ function MailboxForm({ domains, mailbox, maxMb, onClose, onSaved }: { domains: D
             <div className="flex items-center gap-1.5">
               <Input autoFocus value={local} onChange={(e) => setLocal(e.target.value)} placeholder="name" required />
               <span className="text-muted">@</span>
-              <Select value={domainId} onChange={(e) => { setDomainId(e.target.value); const d = domains.find((x) => x.id === Number(e.target.value)); if (d) setQuota(Math.min(d.default_quota_mb, maxMb)); }} aria-label="Domain">
+              <Select value={domainId} onChange={(e) => { setDomainId(e.target.value); const d = domains.find((x) => x.id === Number(e.target.value)); if (d) setQuota(defaultFor(d, maxMb)); }} aria-label="Domain">
                 {domains.map((d) => (
                   <option key={d.id} value={d.id}>{d.name}</option>
                 ))}
