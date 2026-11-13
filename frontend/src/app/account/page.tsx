@@ -4,7 +4,8 @@ import { ArrowLeft } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { api, useMe, type Me } from "@/lib/api";
+import { api, useLoad, useMe, type Me } from "@/lib/api";
+import { ConnectionSettings, type Connection } from "@/components/ConnectionSettings";
 import { PasswordCard } from "@/components/PasswordCard";
 import { Button, Card, Field, Input, Spinner, toast } from "@/components/ui";
 
@@ -16,6 +17,7 @@ export default function AccountPage() {
   const [busy, setBusy] = useState(false);
   const signature = useRef("");
   const loaded = useRef(false);
+  const connection = useLoad<Connection>("/mail/connection");
 
   useEffect(() => {
     if (me && me.kind === "user" && !loaded.current) {
@@ -73,18 +75,14 @@ export default function AccountPage() {
         </Card>
         <div className="space-y-5">
           <PasswordCard />
-          <Card className="p-5 text-sm">
-            <h2 className="mb-2 font-semibold">Use another mail app</h2>
-            <p className="text-muted">Sign in with your full email address and password.</p>
-            <dl className="mt-3 space-y-1.5 text-[13px]">
-              <div className="flex justify-between gap-3"><dt className="text-muted">Incoming (IMAP)</dt><dd className="font-mono">port 993 · SSL/TLS</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted">Outgoing (SMTP)</dt><dd className="font-mono">port 465 · SSL/TLS</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted">Outgoing (alt.)</dt><dd className="font-mono">port 587 · STARTTLS</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted">Server</dt><dd className="font-mono break-all">{typeof window !== "undefined" ? window.location.hostname : ""}</dd></div>
-            </dl>
-          </Card>
         </div>
       </div>
+
+      <Card className="mt-5 p-5">
+        <h2 className="font-semibold">Connection settings</h2>
+        <p className="mt-0.5 mb-4 text-sm text-muted">Use these to add your mailbox to Outlook, Thunderbird, Apple Mail or the mail app on your phone.</p>
+        {connection.data ? <ConnectionSettings info={connection.data} /> : connection.error ? <p className="text-sm text-danger">{connection.error}</p> : <Spinner />}
+      </Card>
     </main>
   );
 }

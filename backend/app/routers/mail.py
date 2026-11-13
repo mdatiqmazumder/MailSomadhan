@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..config import settings
+from ..connection import connection_info
 from ..db import get_db
 from ..deps import require_user
 from ..imap_client import FOLDER_NAME_RE, MailError, MailSession
@@ -34,6 +35,11 @@ def _session(user: Mailbox) -> MailSession:
 
 def _fail(exc: MailError):
     raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/connection")
+def connection(user: Mailbox = Depends(require_user), db: Session = Depends(get_db)):
+    return connection_info(db, user)
 
 
 @router.get("/folders")

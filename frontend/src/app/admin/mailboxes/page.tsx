@@ -1,12 +1,13 @@
 "use client";
 
-import { KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
+import { KeyRound, Pencil, Plug, Plus, Send, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { api, formatDate, useLoad } from "@/lib/api";
 import { useAdmin } from "@/lib/admin";
 import { QuotaPicker, UsageBar } from "@/components/Storage";
-import { Avatar, Button, Card, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Toggle, toast, confirmDialog } from "@/components/ui";
+import { ConnectionSettings, type Connection } from "@/components/ConnectionSettings";
+import { Avatar, Button, Card, Checkbox, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Toggle, toast, confirmDialog } from "@/components/ui";
 
 type Domain = { id: number; name: string; default_quota_mb: number; storage_limit_mb: number; allocated_mb: number };
 type Mailbox = {
@@ -35,6 +36,7 @@ export default function MailboxesPage() {
   const [domainFilter, setDomainFilter] = useState("");
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Mailbox | null>(null);
+  const [showing, setShowing] = useState<Mailbox | null>(null);
 
   const visible = useMemo(
     () =>
@@ -118,6 +120,9 @@ export default function MailboxesPage() {
                 </td>
                 <td>
                   <div className="flex justify-end gap-1">
+                    <IconButton label="Connection settings" onClick={() => setShowing(m)}>
+                      <Plug className="h-4 w-4" />
+                    </IconButton>
                     {(can("mailboxes.edit") || can("mailboxes.password")) && <IconButton label="Edit mailbox" onClick={() => setEditing(m)}>
                       <Pencil className="h-4 w-4" />
                     </IconButton>}
@@ -143,6 +148,7 @@ export default function MailboxesPage() {
           }}
         />
       )}
+      {showing && <ConnectionModal mailbox={showing} onClose={() => setShowing(null)} />}
       {editing && (
         <MailboxForm
           domains={domains.data || []}
@@ -169,6 +175,7 @@ function MailboxForm({ domains, mailbox, maxMb, onClose, onSaved }: { domains: D
   // Free pool of the domain; when editing, this mailbox's current quota is available to itself.
   const available = domain ? domain.storage_limit_mb - domain.allocated_mb + (mailbox ? mailbox.quota_mb : 0) : maxMb;
   const [busy, setBusy] = useState(false);
+  const [welcome, setWelcome] = useState(true);
   const { can } = useAdmin();
   const canEdit = !mailbox || can("mailboxes.edit");
   const canPassword = !mailbox || can("mailboxes.password");
@@ -184,10 +191,11 @@ function MailboxForm({ domains, mailbox, maxMb, onClose, onSaved }: { domains: D
         });
         toast.ok("Mailbox updated");
       } else {
-        await api("/admin/mailboxes", {
-          json: { domain_id: Number(domainId), local_part: local, password, display_name: displayName, quota_mb: quota },
+        const created = await api<{ email: string; welcome_sent: boolean }>("/admin/mailboxes", {
+          json: { domain_id: Number(domainId), local_part: local, password, display_name: displayName, quota_mb: quota, send_welcome: welcome },
         });
-        toast.ok("Mailbox created");
+        if (welcome && !created.welcome_sent) toast.error(`${created.email} created, but the welcome email could not be delivered`);
+        else toast.ok(welcome ? `${created.email} created; welcome email delivered` : `${created.email} created`);
       }
       onSaved();
     } catch (err) {
@@ -226,11 +234,52 @@ function MailboxForm({ domains, mailbox, maxMb, onClose, onSaved }: { domains: D
         {canEdit && <Field label="Storage">
           <QuotaPicker valueMb={quota} onChange={setQuota} maxMb={maxMb} availableMb={available} domainName={domain?.name} limitMb={domain?.storage_limit_mb} />
         </Field>}
+        {!mailbox && (
+          <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+            <Checkbox className="mt-0.5" checked={welcome} onChange={setWelcome} label="Send a welcome email" />
+            <span>
+              Send a welcome email
+              <span className="block text-[13px] text-muted">Delivered to the new inbox with the webmail address and the IMAP and SMTP settings. The password is not included.</span>
+            </span>
+          </label>
+        )}
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>
           <Button type="submit" variant="primary" loading={busy}>{mailbox ? "Save changes" : "Create mailbox"}</Button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+function ConnectionModal({ mailbox, onClose }: { mailbox: Mailbox; onClose: () => void }) {
+  const { data, error } = useLoad<Connection>(`/admin/mailboxes/${mailbox.id}/connection`);
+  const { can } = useAdmin();
+  const [sending, setSending] = useState(false);
+
+  async function resend() {
+    setSending(true);
+    try {
+      await api(`/admin/mailboxes/${mailbox.id}/welcome`, { method: "POST" });
+      toast.ok(`Welcome email delivered to ${mailbox.email}`);
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <Modal title="Connection settings" description={mailbox.email} onClose={onClose}>
+      {data ? <ConnectionSettings info={data} /> : error ? <p className="text-sm text-danger">{error}</p> : <Spinner />}
+      <div className="mt-5 flex justify-end gap-2">
+        {(can("mailboxes.create") || can("mailboxes.edit")) && (
+          <Button onClick={resend} loading={sending} disabled={!mailbox.active} title={mailbox.active ? undefined : "The mailbox is disabled"}>
+            <Send className="h-4 w-4" /> Send welcome email
+          </Button>
+        )}
+        <Button variant="primary" onClick={onClose}>Done</Button>
+      </div>
     </Modal>
   );
 }

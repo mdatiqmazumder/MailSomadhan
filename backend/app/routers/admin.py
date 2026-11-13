@@ -13,6 +13,7 @@ from ..deps import AdminCtx, client_ip, parse_networks, require_admin, require_p
 from ..models import Admin, Alias, Domain, Host, Mailbox, Relay, Setting
 from ..quota import allocated_mb, check_mailbox_quota, gb, max_mailbox_mb, usage_kb
 from .cloudflare import publish_dkim
+from ..connection import connection_info, deliver_welcome
 from ..security import DOMAIN_RE, EMAIL_RE, LOCAL_RE, check_password_rules, hash_password
 from ..system import (DEFAULT_SETTINGS, disk_usage, dns_records, generate_dkim, get_setting,
                       get_settings_map, mail_queue, remove_dkim, run_helper, service_status,
@@ -180,6 +181,7 @@ class MailboxIn(BaseModel):
     password: str = Field(max_length=200)
     display_name: str = Field(default="", max_length=200)
     quota_mb: int | None = Field(default=None, ge=1, le=1024 * 1024)
+    send_welcome: bool = True
 
 
 class MailboxPatch(BaseModel):
@@ -235,7 +237,30 @@ def create_mailbox(body: MailboxIn, db: Session = Depends(get_db), ctx: AdminCtx
     )
     db.add(mbox)
     db.commit()
-    return _mailbox_out(mbox)
+    out = _mailbox_out(mbox)
+    out["welcome_sent"] = deliver_welcome(db, mbox) if body.send_welcome else False
+    return out
+
+
+@scoped.get("/mailboxes/{mailbox_id}/connection")
+def mailbox_connection(mailbox_id: int, db: Session = Depends(get_db), ctx: AdminCtx = Depends(require_perm("mailboxes.view"))):
+    mbox = db.get(Mailbox, mailbox_id)
+    if not mbox or not ctx.can_domain(mbox.domain_id):
+        raise HTTPException(404, "Mailbox not found")
+    return connection_info(db, mbox)
+
+
+@scoped.post("/mailboxes/{mailbox_id}/welcome")
+def send_welcome(mailbox_id: int, db: Session = Depends(get_db),
+                 ctx: AdminCtx = Depends(require_perm("mailboxes.create", "mailboxes.edit"))):
+    mbox = db.get(Mailbox, mailbox_id)
+    if not mbox or not ctx.can_domain(mbox.domain_id):
+        raise HTTPException(404, "Mailbox not found")
+    if not mbox.active:
+        raise HTTPException(400, "The mailbox is disabled")
+    if not deliver_welcome(db, mbox):
+        raise HTTPException(502, "The welcome message could not be delivered to this mailbox")
+    return {"ok": True}
 
 
 @scoped.patch("/mailboxes/{mailbox_id}")
