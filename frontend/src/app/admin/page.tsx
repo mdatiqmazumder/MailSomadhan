@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api, formatBytes, useLoad } from "@/lib/api";
+import { useAdmin } from "@/lib/admin";
 import { BarList, SERIES, SegmentedBar, StatTile, TimeSeriesChart, compact } from "@/components/charts";
 import RangePicker, { useRange } from "@/components/RangePicker";
 import { Badge, Button, Card, Notice, PageHeader, PageSkeleton, Select, cx } from "@/components/ui";
@@ -30,7 +31,8 @@ export default function Dashboard() {
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const stats = useLoad<Stats>("/admin/stats");
+  const { isSuper } = useAdmin();
+  const stats = useLoad<Stats>(isSuper ? "/admin/stats" : null);
   const domains = useLoad<{ id: number; name: string }[]>("/admin/domains");
 
   async function load() {
@@ -175,7 +177,7 @@ export default function Dashboard() {
             <BarList items={(data?.top_inbound_sources || []).map((d) => ({ label: d.domain, value: d.count }))} color={SERIES.received.color} />
           </div>
         </Card>
-        <Card title="Server health" actions={<Link href="/admin/queue" className="inline-flex items-center gap-1 text-[13px] font-medium text-accent hover:underline"><ListOrdered className="h-3.5 w-3.5" /> Queue: {stats.data?.queue ?? "—"}</Link>}>
+        {isSuper && <Card title="Server health" actions={<Link href="/admin/queue" className="inline-flex items-center gap-1 text-[13px] font-medium text-accent hover:underline"><ListOrdered className="h-3.5 w-3.5" /> Queue: {stats.data?.queue ?? "—"}</Link>}>
           <div className="p-5">
             <ul className="grid grid-cols-2 gap-x-4 gap-y-2 text-[13px]">
               {stats.data?.services.map((s) => (
@@ -196,7 +198,7 @@ export default function Dashboard() {
               {stats.data && <p className="mt-1.5 text-xs text-muted">{formatBytes(stats.data.disk.free)} free of {formatBytes(stats.data.disk.total)}</p>}
             </div>
           </div>
-        </Card>
+        </Card>}
       </div>
     </>
   );

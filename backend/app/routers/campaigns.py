@@ -14,13 +14,13 @@ from sqlalchemy.orm import Session
 from ..campaigns import read_unsubscribe_token, recipient_fields, render, used_fields
 from ..config import settings
 from ..db import get_db
-from ..deps import require_admin, require_user
+from ..deps import AdminCtx, require_perm, require_user
 from ..models import Campaign, CampaignRecipient, Domain, Mailbox, Suppression
 from ..security import EMAIL_RE
 from ..system import get_setting
 
 user_router = APIRouter()
-admin_router = APIRouter(dependencies=[Depends(require_admin)])
+admin_router = APIRouter()  # every endpoint checks campaigns.manage and the domain scope
 public_router = APIRouter()
 
 MODES = {"instant", "fixed", "random"}
@@ -283,9 +283,21 @@ def campaign_action(campaign_id: int, action: str, user: Mailbox = Depends(requi
 
 
 # ================================================================ admin
+CAMPAIGNS = require_perm("campaigns.manage")
+
+
+def scoped_campaign(db: Session, ctx: AdminCtx, campaign_id: int) -> Campaign:
+    c = db.get(Campaign, campaign_id)
+    if not c or not c.mailbox or not ctx.can_domain(c.mailbox.domain_id):
+        raise HTTPException(404, "Campaign not found")
+    return c
+
+
 @admin_router.get("/campaigns")
-def admin_campaigns(status: str = "", db: Session = Depends(get_db)):
+def admin_campaigns(status: str = "", db: Session = Depends(get_db), ctx: AdminCtx = Depends(CAMPAIGNS)):
     q = select(Campaign).order_by(Campaign.id.desc()).limit(500)
+    if ctx.domain_ids is not None:
+        q = q.join(Mailbox, Mailbox.id == Campaign.mailbox_id).where(Mailbox.domain_id.in_(ctx.domain_ids or [-1]))
     if status:
         q = q.where(Campaign.status == status)
     items = db.execute(q).scalars().all()
@@ -295,20 +307,16 @@ def admin_campaigns(status: str = "", db: Session = Depends(get_db)):
 
 @admin_router.get("/campaigns/{campaign_id}")
 def admin_campaign(campaign_id: int, status: str = "", page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200),
-                   db: Session = Depends(get_db)):
-    c = db.get(Campaign, campaign_id)
-    if not c:
-        raise HTTPException(404, "Campaign not found")
+                   db: Session = Depends(get_db), ctx: AdminCtx = Depends(CAMPAIGNS)):
+    c = scoped_campaign(db, ctx, campaign_id)
     return campaign_detail(db, c, status, page, size, owner=True)
 
 
 @admin_router.post("/campaigns/{campaign_id}/{action}")
-def admin_campaign_action(campaign_id: int, action: str, db: Session = Depends(get_db)):
+def admin_campaign_action(campaign_id: int, action: str, db: Session = Depends(get_db), ctx: AdminCtx = Depends(CAMPAIGNS)):
     if action not in ("approve", "pause", "resume", "cancel"):
         raise HTTPException(404, "Unknown action")
-    c = db.get(Campaign, campaign_id)
-    if not c:
-        raise HTTPException(404, "Campaign not found")
+    c = scoped_campaign(db, ctx, campaign_id)
     change_state(db, c, action, admin=True)
     return campaign_out(c, counts(db, [c.id])[c.id], owner=True)
 
@@ -321,8 +329,10 @@ class SuppressionIn(BaseModel):
 
 @admin_router.get("/suppressions")
 def list_suppressions(q: str = "", reason: str = "", page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200),
-                      db: Session = Depends(get_db)):
+                      db: Session = Depends(get_db), ctx: AdminCtx = Depends(CAMPAIGNS)):
     query = select(Suppression, Domain.name).join(Domain, Domain.id == Suppression.domain_id)
+    if ctx.domain_ids is not None:
+        query = query.where(Suppression.domain_id.in_(ctx.domain_ids or [-1]))
     if q:
         query = query.where(Suppression.email.like(f"%{q.strip().lower()}%"))
     if reason:
@@ -334,8 +344,8 @@ def list_suppressions(q: str = "", reason: str = "", page: int = Query(1, ge=1),
 
 
 @admin_router.post("/suppressions")
-def add_suppressions(body: SuppressionIn, db: Session = Depends(get_db)):
-    if not db.get(Domain, body.domain_id):
+def add_suppressions(body: SuppressionIn, db: Session = Depends(get_db), ctx: AdminCtx = Depends(CAMPAIGNS)):
+    if not db.get(Domain, body.domain_id) or not ctx.can_domain(body.domain_id):
         raise HTTPException(400, "Domain not found")
     added, skipped = 0, []
     for raw in re.split(r"[\s,;]+", body.emails):
@@ -354,9 +364,9 @@ def add_suppressions(body: SuppressionIn, db: Session = Depends(get_db)):
 
 
 @admin_router.delete("/suppressions/{sid}")
-def delete_suppression(sid: int, db: Session = Depends(get_db)):
+def delete_suppression(sid: int, db: Session = Depends(get_db), ctx: AdminCtx = Depends(CAMPAIGNS)):
     s = db.get(Suppression, sid)
-    if not s:
+    if not s or not ctx.can_domain(s.domain_id):
         raise HTTPException(404, "Not found")
     db.delete(s)
     db.commit()

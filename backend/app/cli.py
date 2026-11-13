@@ -50,6 +50,16 @@ def cmd_reset_admin(args) -> None:
     print(f"password updated for admin: {args.username}")
 
 
+def cmd_open_console(_args) -> None:
+    """Emergency: allow console sign-in from any network again."""
+    with SessionLocal() as db:
+        row = db.get(Setting, "admin_allowed_networks")
+        if row:
+            row.value = ""
+            db.commit()
+    print("console access is allowed from any network again")
+
+
 def cmd_sync(_args) -> None:
     with SessionLocal() as db:
         write_hosts_file(db)
@@ -68,6 +78,8 @@ def main() -> None:
     p.add_argument("--username", default="admin")
     p.add_argument("--password", required=True)
     p.set_defaults(func=cmd_reset_admin)
+    p = sub.add_parser("open-console")
+    p.set_defaults(func=cmd_open_console)
     p = sub.add_parser("sync")
     p.set_defaults(func=cmd_sync)
     args = parser.parse_args()

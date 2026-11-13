@@ -1,22 +1,26 @@
+import ipaddress
 import re
 import smtplib
 import ssl
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import require_admin
-from ..models import Alias, Domain, Host, Mailbox, Relay, Setting
+from ..deps import AdminCtx, client_ip, parse_networks, require_admin, require_perm
+from ..models import Admin, Alias, Domain, Host, Mailbox, Relay, Setting
 from ..quota import allocated_mb, check_mailbox_quota, gb, max_mailbox_mb, usage_kb
 from ..security import DOMAIN_RE, EMAIL_RE, LOCAL_RE, check_password_rules, hash_password
 from ..system import (DEFAULT_SETTINGS, disk_usage, dns_records, generate_dkim, get_setting,
                       get_settings_map, mail_queue, remove_dkim, run_helper, service_status,
                       tls_info, write_hosts_file, write_selector_map)
 
+# Super-admin-only endpoints.
 router = APIRouter(dependencies=[Depends(require_admin)])
+# Endpoints open to limited admins: each checks a permission and restricts data to ctx.domain_ids.
+scoped = APIRouter()
 
 RELAY_HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
 QUEUE_ID_RE = re.compile(r"^[A-Za-z0-9]{5,20}$")
@@ -70,15 +74,19 @@ def _domain_out(d: Domain, counts: dict[int, int] | None = None, allocated: dict
     }
 
 
-@router.get("/domains")
-def list_domains(db: Session = Depends(get_db)):
+@scoped.get("/domains")
+def list_domains(db: Session = Depends(get_db),
+                 ctx: AdminCtx = Depends(require_perm("domains.view", "mailboxes.view", "aliases.manage", "analytics.view", "campaigns.manage"))):
     counts = dict(db.query(Mailbox.domain_id, func.count(Mailbox.id)).group_by(Mailbox.domain_id).all())
     allocated = {k: int(v) for k, v in db.query(Mailbox.domain_id, func.sum(Mailbox.quota_mb)).group_by(Mailbox.domain_id).all()}
     usage = usage_kb()
     used: dict[int, int] = {}
     for email, domain_id in db.query(Mailbox.email, Mailbox.domain_id).all():
         used[domain_id] = used.get(domain_id, 0) + usage.get(email, 0)
-    return [_domain_out(d, counts, allocated, used) for d in db.query(Domain).order_by(Domain.name).all()]
+    query = db.query(Domain).order_by(Domain.name)
+    if ctx.domain_ids is not None:
+        query = query.filter(Domain.id.in_(ctx.domain_ids or [-1]))
+    return [_domain_out(d, counts, allocated, used) for d in query.all()]
 
 
 @router.post("/domains")
@@ -142,8 +150,9 @@ def delete_domain(domain_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-@router.get("/domains/{domain_id}/dns")
-def domain_dns(domain_id: int, db: Session = Depends(get_db)):
+@scoped.get("/domains/{domain_id}/dns")
+def domain_dns(domain_id: int, db: Session = Depends(get_db), ctx: AdminCtx = Depends(require_perm("domains.view"))):
+    ctx.check_domain(domain_id)
     domain = db.get(Domain, domain_id)
     if not domain:
         raise HTTPException(404, "Domain not found")
@@ -186,9 +195,12 @@ def _mailbox_out(m: Mailbox, usage: dict[str, int] | None = None) -> dict:
     }
 
 
-@router.get("/mailboxes")
-def list_mailboxes(domain_id: int | None = None, q: str = "", db: Session = Depends(get_db)):
+@scoped.get("/mailboxes")
+def list_mailboxes(domain_id: int | None = None, q: str = "", db: Session = Depends(get_db),
+                   ctx: AdminCtx = Depends(require_perm("mailboxes.view"))):
     query = db.query(Mailbox)
+    if ctx.domain_ids is not None:
+        query = query.filter(Mailbox.domain_id.in_(ctx.domain_ids or [-1]))
     if domain_id:
         query = query.filter(Mailbox.domain_id == domain_id)
     if q:
@@ -197,8 +209,9 @@ def list_mailboxes(domain_id: int | None = None, q: str = "", db: Session = Depe
     return [_mailbox_out(m, usage) for m in query.order_by(Mailbox.email).limit(2000).all()]
 
 
-@router.post("/mailboxes")
-def create_mailbox(body: MailboxIn, db: Session = Depends(get_db)):
+@scoped.post("/mailboxes")
+def create_mailbox(body: MailboxIn, db: Session = Depends(get_db), ctx: AdminCtx = Depends(require_perm("mailboxes.create"))):
+    ctx.check_domain(body.domain_id)
     domain = db.get(Domain, body.domain_id)
     if not domain:
         raise HTTPException(400, "Domain not found")
@@ -222,16 +235,22 @@ def create_mailbox(body: MailboxIn, db: Session = Depends(get_db)):
     return _mailbox_out(mbox)
 
 
-@router.patch("/mailboxes/{mailbox_id}")
-def update_mailbox(mailbox_id: int, body: MailboxPatch, db: Session = Depends(get_db)):
+@scoped.patch("/mailboxes/{mailbox_id}")
+def update_mailbox(mailbox_id: int, body: MailboxPatch, db: Session = Depends(get_db),
+                   ctx: AdminCtx = Depends(require_perm("mailboxes.edit", "mailboxes.password"))):
     mbox = db.get(Mailbox, mailbox_id)
-    if not mbox:
+    if not mbox or not ctx.can_domain(mbox.domain_id):
         raise HTTPException(404, "Mailbox not found")
+    if body.password and not ctx.can("mailboxes.password"):
+        raise HTTPException(403, "You may not reset passwords")
+    if (body.display_name is not None or body.quota_mb is not None or body.active is not None) and not ctx.can("mailboxes.edit"):
+        raise HTTPException(403, "You may only reset passwords")
     if body.password:
         problem = check_password_rules(body.password)
         if problem:
             raise HTTPException(400, problem)
         mbox.password_hash = hash_password(body.password)
+        mbox.token_version += 1  # end the user's webmail sessions
     if body.display_name is not None:
         mbox.display_name = body.display_name.strip()
     if body.quota_mb is not None and body.quota_mb != mbox.quota_mb:
@@ -239,14 +258,16 @@ def update_mailbox(mailbox_id: int, body: MailboxPatch, db: Session = Depends(ge
         mbox.quota_mb = body.quota_mb
     if body.active is not None:
         mbox.active = body.active
+        if not body.active:
+            mbox.token_version += 1
     db.commit()
     return _mailbox_out(mbox)
 
 
-@router.delete("/mailboxes/{mailbox_id}")
-def delete_mailbox(mailbox_id: int, db: Session = Depends(get_db)):
+@scoped.delete("/mailboxes/{mailbox_id}")
+def delete_mailbox(mailbox_id: int, db: Session = Depends(get_db), ctx: AdminCtx = Depends(require_perm("mailboxes.delete"))):
     mbox = db.get(Mailbox, mailbox_id)
-    if not mbox:
+    if not mbox or not ctx.can_domain(mbox.domain_id):
         raise HTTPException(404, "Mailbox not found")
     email = mbox.email
     db.delete(mbox)
@@ -281,17 +302,20 @@ def _alias_out(a: Alias) -> dict:
             "domain_id": a.domain_id}
 
 
-@router.get("/aliases")
-def list_aliases(db: Session = Depends(get_db)):
-    return [_alias_out(a) for a in db.query(Alias).order_by(Alias.source).all()]
+@scoped.get("/aliases")
+def list_aliases(db: Session = Depends(get_db), ctx: AdminCtx = Depends(require_perm("aliases.manage"))):
+    query = db.query(Alias).order_by(Alias.source)
+    if ctx.domain_ids is not None:
+        query = query.filter(Alias.domain_id.in_(ctx.domain_ids or [-1]))
+    return [_alias_out(a) for a in query.all()]
 
 
-@router.post("/aliases")
-def create_alias(body: AliasIn, db: Session = Depends(get_db)):
+@scoped.post("/aliases")
+def create_alias(body: AliasIn, db: Session = Depends(get_db), ctx: AdminCtx = Depends(require_perm("aliases.manage"))):
     source = body.source.strip().lower()
     local, _, domain_name = source.rpartition("@")
     domain = db.query(Domain).filter_by(name=domain_name).first()
-    if not domain:
+    if not domain or not ctx.can_domain(domain.id):
         raise HTTPException(400, "The alias must belong to one of your domains")
     if local and not LOCAL_RE.match(local):  # empty local part = catch-all
         raise HTTPException(400, "Invalid alias address")
@@ -303,10 +327,10 @@ def create_alias(body: AliasIn, db: Session = Depends(get_db)):
     return _alias_out(alias)
 
 
-@router.patch("/aliases/{alias_id}")
-def update_alias(alias_id: int, body: AliasPatch, db: Session = Depends(get_db)):
+@scoped.patch("/aliases/{alias_id}")
+def update_alias(alias_id: int, body: AliasPatch, db: Session = Depends(get_db), ctx: AdminCtx = Depends(require_perm("aliases.manage"))):
     alias = db.get(Alias, alias_id)
-    if not alias:
+    if not alias or not ctx.can_domain(alias.domain_id):
         raise HTTPException(404, "Alias not found")
     if body.destination is not None:
         alias.destination = _clean_destinations(body.destination)
@@ -316,10 +340,10 @@ def update_alias(alias_id: int, body: AliasPatch, db: Session = Depends(get_db))
     return _alias_out(alias)
 
 
-@router.delete("/aliases/{alias_id}")
-def delete_alias(alias_id: int, db: Session = Depends(get_db)):
+@scoped.delete("/aliases/{alias_id}")
+def delete_alias(alias_id: int, db: Session = Depends(get_db), ctx: AdminCtx = Depends(require_perm("aliases.manage"))):
     alias = db.get(Alias, alias_id)
-    if not alias:
+    if not alias or not ctx.can_domain(alias.domain_id):
         raise HTTPException(404, "Alias not found")
     db.delete(alias)
     db.commit()
@@ -512,6 +536,8 @@ class SettingsIn(BaseModel):
     acme_email: str | None = Field(default=None, max_length=320)
     max_mailbox_quota_mb: int | None = Field(default=None, ge=1, le=1024 * 1024)
     default_domain_storage_mb: int | None = Field(default=None, ge=1, le=100 * 1024 * 1024)
+    require_admin_2fa: int | None = Field(default=None, ge=0, le=1)
+    admin_allowed_networks: str | None = Field(default=None, max_length=4000)
     campaign_daily_limit: int | None = Field(default=None, ge=1, le=100000)
     campaign_max_recipients: int | None = Field(default=None, ge=1, le=100000)
     campaign_domain_hourly_limit: int | None = Field(default=None, ge=0, le=10000)
@@ -526,10 +552,21 @@ def read_settings(db: Session = Depends(get_db)):
 
 
 @router.put("/settings")
-def write_settings(body: SettingsIn, db: Session = Depends(get_db)):
+def write_settings(body: SettingsIn, request: Request, db: Session = Depends(get_db), me: Admin = Depends(require_admin)):
     data = body.model_dump(exclude_none=True)
+    if "admin_allowed_networks" in data:
+        try:
+            nets = parse_networks(data["admin_allowed_networks"])
+        except ValueError as exc:
+            raise HTTPException(400, f"Not a valid IP address or network: {exc}") from exc
+        ip = ipaddress.ip_address(client_ip(request))
+        if nets and not any(ip in n for n in nets):
+            raise HTTPException(400, f"Your current address {ip} is not in the list; you would lock yourself out")
+        data["admin_allowed_networks"] = ", ".join(str(n) for n in nets)
     if data.get("acme_email") and not EMAIL_RE.match(data["acme_email"]):
         raise HTTPException(400, "Invalid contact email")
+    if data.get("require_admin_2fa") == 1 and not me.totp_enabled:
+        raise HTTPException(400, "Turn on two-factor sign-in for your own account first (Account page)")
     cap = data.get("max_mailbox_quota_mb") or max_mailbox_mb(db)
     if (data.get("default_quota_mb") or int(get_setting(db, "default_quota_mb") or 1024)) > cap:
         raise HTTPException(400, f"The default mailbox quota cannot exceed the {gb(cap)} maximum")

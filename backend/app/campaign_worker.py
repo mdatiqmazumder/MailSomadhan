@@ -140,7 +140,8 @@ def process(db, c: Campaign, now: datetime) -> None:
             c.next_send_at, c.waiting_reason = now + timedelta(minutes=2), str(exc)[:200]
             return
         c.status, c.waiting_reason = "running", ""
-        c.next_send_at = now + timedelta(seconds=gap_seconds(c))
+        # Measure the gap from when this message actually went out, not from the start of the tick.
+        c.next_send_at = utcnow() + timedelta(seconds=gap_seconds(c))
         return
     if blocked_until:
         c.next_send_at = min(blocked_until)

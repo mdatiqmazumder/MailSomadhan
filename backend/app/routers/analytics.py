@@ -10,10 +10,10 @@ from sqlalchemy import and_, case, exists, func, literal, or_, select
 from sqlalchemy.orm import Session
 
 from ..db import engine, get_db
-from ..deps import require_admin
+from ..deps import AdminCtx, require_perm
 from ..models import Domain, MailDelivery, MailMessage, Mailbox
 
-router = APIRouter(dependencies=[Depends(require_admin)])
+router = APIRouter()
 
 PG = engine.dialect.name == "postgresql"
 FLAGGED_ACTIONS = ("add header", "rewrite subject", "reject", "soft reject", "greylist")
@@ -84,14 +84,28 @@ def all_buckets(r: Range) -> list[str]:
     return out
 
 
-def domain_filter(domain: str | None):
-    if not domain:
+def domain_scope(domain: str | None = None, db: Session = Depends(get_db),
+                 ctx: AdminCtx = Depends(require_perm("analytics.view"))) -> list[str] | None:
+    """Domains the caller may see: the requested one (if allowed), else all of theirs (None = all)."""
+    if domain:
+        d = db.query(Domain).filter_by(name=domain.strip().lower()).first()
+        if not d or not ctx.can_domain(d.id):
+            raise HTTPException(404, "Domain not found")
+        return [d.name]
+    if ctx.domain_ids is None:
+        return None
+    return [n for (n,) in db.query(Domain.name).filter(Domain.id.in_(ctx.domain_ids or [-1]))]
+
+
+def domain_filter(names: list[str] | None):
+    if names is None:
         return literal(True)
-    d = domain.strip().lower()
+    if not names:
+        return literal(False)
     return or_(
-        MailMessage.sender_domain == d,
-        MailMessage.user_email.like(f"%@{d}"),
-        exists().where(and_(MailDelivery.message_pk == MailMessage.id, MailDelivery.recipient_domain == d)),
+        MailMessage.sender_domain.in_(names),
+        *[MailMessage.user_email.like(f"%@{n}") for n in names],
+        exists().where(and_(MailDelivery.message_pk == MailMessage.id, MailDelivery.recipient_domain.in_(names))),
     )
 
 
@@ -109,8 +123,8 @@ def flagged_cond():
 
 # ---------------------------------------------------------------- overview
 @router.get("/analytics/overview")
-def overview(r: Range = Depends(range_dep), domain: str | None = None, db: Session = Depends(get_db)):
-    base = and_(in_range(r), domain_filter(domain))
+def overview(r: Range = Depends(range_dep), scope: list[str] | None = Depends(domain_scope), db: Session = Depends(get_db)):
+    base = and_(in_range(r), domain_filter(scope))
     m = MailMessage
     totals = db.execute(select(
         func.count(m.id),
@@ -233,14 +247,14 @@ def with_rates(metrics: dict) -> dict:
 
 
 @router.get("/analytics/users")
-def users(r: Range = Depends(range_dep), domain: str | None = None, q: str = "", sort: str = "sent",
+def users(r: Range = Depends(range_dep), scope: list[str] | None = Depends(domain_scope), q: str = "", sort: str = "sent",
           order: str = "desc", page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=500),
           db: Session = Depends(get_db)):
     if sort not in USER_SORTS:
         sort = "sent"
     mq = select(Mailbox.email, Mailbox.display_name, Mailbox.active, Domain.name).join(Domain)
-    if domain:
-        mq = mq.where(Domain.name == domain.strip().lower())
+    if scope is not None:
+        mq = mq.where(Domain.name.in_(scope))
     if q:
         like = f"%{q.strip().lower()}%"
         mq = mq.where(or_(Mailbox.email.like(like), func.lower(Mailbox.display_name).like(like)))
@@ -259,10 +273,11 @@ def users(r: Range = Depends(range_dep), domain: str | None = None, q: str = "",
 
 
 @router.get("/analytics/users/{email}")
-def user_detail(email: str, r: Range = Depends(range_dep), db: Session = Depends(get_db)):
+def user_detail(email: str, r: Range = Depends(range_dep), scope: list[str] | None = Depends(domain_scope),
+                db: Session = Depends(get_db)):
     email = email.strip().lower()
     box = db.query(Mailbox).filter_by(email=email).first()
-    if not box:
+    if not box or (scope is not None and box.domain.name not in scope):
         raise HTTPException(404, "Mailbox not found")
     m, d = MailMessage, MailDelivery
     metrics = with_rates(user_metrics(db, r, [email]).get(email, {}))
@@ -314,9 +329,9 @@ def user_detail(email: str, r: Range = Depends(range_dep), db: Session = Depends
 
 # ---------------------------------------------------------------- message log
 def message_query(r: Range, direction: str | None, status: str | None, q: str, sender: str, recipient: str,
-                  domain: str | None, user: str, spam: bool, attachment: bool):
+                  scope: list[str] | None, user: str, spam: bool, attachment: bool):
     m, d = MailMessage, MailDelivery
-    cond = [in_range(r), domain_filter(domain)]
+    cond = [in_range(r), domain_filter(scope)]
     if direction in DIRECTIONS:
         cond.append(m.direction == direction)
     if status in STATUSES:
@@ -361,10 +376,10 @@ def message_row(msg: MailMessage, full: bool = False) -> dict:
 
 @router.get("/messages")
 def messages(r: Range = Depends(range_dep), direction: str | None = None, status: str | None = None, q: str = "",
-             sender: str = "", recipient: str = "", domain: str | None = None, user: str = "", spam: bool = False,
-             attachment: bool = False, page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200),
+             sender: str = "", recipient: str = "", scope: list[str] | None = Depends(domain_scope), user: str = "",
+             spam: bool = False, attachment: bool = False, page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200),
              db: Session = Depends(get_db)):
-    query = message_query(r, direction, status, q, sender, recipient, domain, user, spam, attachment)
+    query = message_query(r, direction, status, q, sender, recipient, scope, user, spam, attachment)
     total = db.execute(select(func.count()).select_from(query.subquery())).scalar_one()
     rows = db.execute(query.order_by(MailMessage.created_at.desc(), MailMessage.id.desc())
                       .offset((page - 1) * size).limit(size)).scalars().all()
@@ -372,14 +387,21 @@ def messages(r: Range = Depends(range_dep), direction: str | None = None, status
 
 
 @router.get("/messages/{message_pk}")
-def message_detail(message_pk: int, db: Session = Depends(get_db)):
-    msg = db.get(MailMessage, message_pk)
+def message_detail(message_pk: int, scope: list[str] | None = Depends(domain_scope), db: Session = Depends(get_db)):
+    msg = db.execute(select(MailMessage).where(MailMessage.id == message_pk, domain_filter(scope))).scalars().first()
     if not msg:
         raise HTTPException(404, "Message not found")
     return message_row(msg, full=True)
 
 
 # ---------------------------------------------------------------- CSV reports
+def csv_cell(value):
+    """Neutralise spreadsheet formulas (CSV injection): mail subjects and addresses come from strangers."""
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
 def csv_response(name: str, header: list[str], rows) -> StreamingResponse:
     def generate():
         buf = io.StringIO()
@@ -390,7 +412,7 @@ def csv_response(name: str, header: list[str], rows) -> StreamingResponse:
         for row in rows:
             buf.seek(0)
             buf.truncate()
-            writer.writerow(row)
+            writer.writerow([csv_cell(v) for v in row])
             yield buf.getvalue()
 
     return StreamingResponse(generate(), media_type="text/csv; charset=utf-8",
@@ -398,14 +420,15 @@ def csv_response(name: str, header: list[str], rows) -> StreamingResponse:
 
 
 @router.get("/reports/{kind}.csv")
-def report_csv(kind: str, r: Range = Depends(range_dep), domain: str | None = None, db: Session = Depends(get_db)):
+def report_csv(kind: str, r: Range = Depends(range_dep), scope: list[str] | None = Depends(domain_scope),
+               db: Session = Depends(get_db)):
     stamp = f"{r.start:%Y%m%d}-{r.end:%Y%m%d}"
     if kind == "summary":
-        data = overview(r, domain, db)
+        data = overview(r, scope, db)
         return csv_response(f"mail-summary-{stamp}.csv", ["period", "sent", "received", "rejected", "bounced", "spam"],
                             ([s["t"], s["sent"], s["received"], s["rejected"], s["bounced"], s["spam"]] for s in data["series"]))
     if kind == "users":
-        data = users(r, domain, "", "sent", "desc", 1, 1_000_000, db)
+        data = users(r, scope, "", "sent", "desc", 1, 1_000_000, db)
         cols = ["email", "display_name", "domain", "active", "sent", "received", "recipients", "external_recipients",
                 "external_share", "bounced", "bounce_rate", "deferred", "blocked", "flagged", "with_attachments",
                 "bytes_sent", "last_sent"]
@@ -416,12 +439,12 @@ def report_csv(kind: str, r: Range = Depends(range_dep), domain: str | None = No
             m.sender_domain, func.count(m.id), count_if(m.direction == "outbound"), count_if(m.direction == "inbound"),
             count_if(m.status.in_(("bounced", "partial"))), count_if(m.status == "rejected"), count_if(flagged_cond()),
             func.coalesce(func.sum(m.size), 0),
-        ).where(in_range(r), domain_filter(domain)).group_by(m.sender_domain).order_by(func.count(m.id).desc())).all()
+        ).where(in_range(r), domain_filter(scope)).group_by(m.sender_domain).order_by(func.count(m.id).desc())).all()
         return csv_response(f"mail-sender-domains-{stamp}.csv",
                             ["sender_domain", "messages", "outbound", "inbound", "bounced", "rejected", "spam", "bytes"],
                             (list(row) for row in rows))
     if kind == "messages":
-        query = message_query(r, None, None, "", "", "", domain, "", False, False)
+        query = message_query(r, None, None, "", "", "", scope, "", False, False)
         rows = db.execute(query.order_by(MailMessage.created_at).limit(200_000)).scalars()
         return csv_response(
             f"mail-log-{stamp}.csv",

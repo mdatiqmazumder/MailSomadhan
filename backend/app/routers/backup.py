@@ -24,7 +24,7 @@ def _json(path: Path, default):
 
 
 def _state() -> Path:
-    return Path(settings.state_dir)
+    return Path(settings.status_dir)
 
 
 def _helper(*args, stdin=None, timeout=60):

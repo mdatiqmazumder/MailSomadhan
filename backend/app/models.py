@@ -11,11 +11,54 @@ def now() -> datetime:
 
 
 class Admin(Base):
+    """Console account. "super_admin" can do everything; "admin" only what `permissions` allow,
+    and only on the domains linked through admin_domains."""
+
     __tablename__ = "admins"
     id: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str] = mapped_column(String(64), unique=True)
     password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(20), default="admin", server_default="super_admin")
+    permissions: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")  # JSON list
+    email: Mapped[str] = mapped_column(String(320), default="", server_default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    totp_secret: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    totp_pending: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class AdminDomain(Base):
+    __tablename__ = "admin_domains"
+    admin_id: Mapped[int] = mapped_column(ForeignKey("admins.id", ondelete="CASCADE"), primary_key=True)
+    domain_id: Mapped[int] = mapped_column(ForeignKey("domains.id", ondelete="CASCADE"), primary_key=True)
+
+
+class AuditLog(Base):
+    """Who changed what in the admin console (request bodies are stored without secrets)."""
+
+    __tablename__ = "audit_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    actor: Mapped[str] = mapped_column(String(320), default="", index=True)
+    actor_kind: Mapped[str] = mapped_column(String(16), default="admin")
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    method: Mapped[str] = mapped_column(String(8), default="")
+    path: Mapped[str] = mapped_column(String(300), default="")
+    status: Mapped[int] = mapped_column(Integer, default=0)
+    details: Mapped[str] = mapped_column(Text, default="")
+
+
+class LoginFailure(Base):
+    """Failed sign-ins, shared by all API workers (per-IP and per-account throttling)."""
+
+    __tablename__ = "login_failures"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    ip: Mapped[str] = mapped_column(String(64), index=True)
+    identifier: Mapped[str] = mapped_column(String(320), index=True)
 
 
 class Relay(Base):
@@ -64,6 +107,7 @@ class Mailbox(Base):
     quota_mb: Mapped[int] = mapped_column(Integer, default=1024)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     signature_html: Mapped[str] = mapped_column(Text, default="")
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 

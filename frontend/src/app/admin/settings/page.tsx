@@ -1,11 +1,10 @@
 "use client";
 
-import { HardDrive } from "lucide-react";
+import { HardDrive, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, formatBytes, useLoad } from "@/lib/api";
-import { PasswordCard } from "@/components/PasswordCard";
 import { formatMb } from "@/components/Storage";
-import { Button, Card, Field, Input, Notice, PageHeader, PageSkeleton, toast } from "@/components/ui";
+import { Button, Card, Field, Input, Notice, PageHeader, PageSkeleton, Toggle, toast } from "@/components/ui";
 
 type Settings = {
   brand_name: string;
@@ -14,6 +13,8 @@ type Settings = {
   max_mailbox_quota_mb: string;
   default_domain_storage_mb: string;
   acme_email: string;
+  require_admin_2fa: string;
+  admin_allowed_networks: string;
   primary_host: string;
   warning?: string;
 };
@@ -111,7 +112,31 @@ export default function SettingsPage() {
             )}
           </form>
         </Card>
-        <PasswordCard />
+        <Card title="Console security" actions={<ShieldCheck className="h-4 w-4 text-muted" />}>
+          <div className="flex items-start justify-between gap-4 p-5">
+            <div>
+              <p className="font-medium">Require two-factor sign-in</p>
+              <p className="mt-0.5 text-sm text-muted">Every console account must use an authenticator app. Accounts without it are sent to set it up at their next sign-in. Turn it on for your own account first.</p>
+            </div>
+            <Toggle
+              label="Require two-factor sign-in"
+              checked={form.require_admin_2fa === "1"}
+              onChange={(v) => put({ require_admin_2fa: v ? 1 : 0 }, "general")}
+            />
+          </div>
+          <form
+            onSubmit={(e) => { e.preventDefault(); put({ admin_allowed_networks: form.admin_allowed_networks }, "general"); }}
+            className="space-y-3 border-t border-border p-5"
+          >
+            <Field
+              label="Allow console sign-in only from"
+              hint="IP addresses or networks, separated by commas (for example 203.0.113.10, 198.51.100.0/24). Empty = any network. Webmail is not affected. Locked out? Run: sudo mailsomadhan open-console"
+            >
+              <Input value={form.admin_allowed_networks} onChange={set("admin_allowed_networks")} placeholder="Any network" className="font-mono text-[13px]" />
+            </Field>
+            <Button type="submit">Save allowed networks</Button>
+          </form>
+        </Card>
       </div>
     </>
   );

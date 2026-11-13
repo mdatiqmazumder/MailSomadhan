@@ -193,7 +193,7 @@ EOF
   # Wait until Rspamd answers again, so no mail slips through unscanned while it restarts.
   local i
   for i in $(seq 1 40); do
-    if rspamc stat >/dev/null 2>&1 && ss -ltn | grep -q ':11332 '; then break; fi
+    if rspamc -P "$(. /etc/mailsomadhan/install.conf >/dev/null 2>&1; echo "${RSPAMD_PASS:-}")" stat >/dev/null 2>&1        && ss -ltn | grep -q ':11332 '; then break; fi
     sleep 0.5
   done
   systemctl reload postfix 2>/dev/null || true
@@ -219,8 +219,10 @@ sync_milter() {
 SRC=/opt/mailsomadhan/src
 CACHE=/var/cache/mailsomadhan/repo
 UPDATE_LOG=/var/log/mailsomadhan-update.log
-RESULT=/var/lib/mailsomadhan/update-result.json
-VERSION_JSON=/var/lib/mailsomadhan/version.json
+STATUS_DIR=/var/lib/mailsomadhan-status   # root-only: never write root files into the panel's own dir
+install -d -o root -g root -m 755 "$STATUS_DIR"
+RESULT=$STATUS_DIR/update-result.json
+VERSION_JSON=$STATUS_DIR/version.json
 REPO_URL="${REPO_URL:-https://github.com/mdatiqmazumder/MailSomadhan.git}"
 BRANCH="${BRANCH:-main}"
 [[ "$REPO_URL" =~ ^(https://|file:///)[A-Za-z0-9._~/-]+$ ]] || die "invalid repository URL in $CONF"
@@ -343,8 +345,8 @@ RCLONE_CONF=/etc/mailsomadhan/rclone.conf
 BACKUP_KEY=/etc/mailsomadhan/backup.key
 GDRIVE_SA=/etc/mailsomadhan/gdrive-service-account.json
 BACKUP_LOG=/var/log/mailsomadhan-backup.log
-BACKUP_STATUS=/var/lib/mailsomadhan/backup-status.json
-BACKUP_PUBLIC=/var/lib/mailsomadhan/backup-settings.json
+BACKUP_STATUS=/var/lib/mailsomadhan-status/backup-status.json
+BACKUP_PUBLIC=/var/lib/mailsomadhan-status/backup-settings.json
 BACKUP_INTERVALS=" 1 2 3 4 6 8 12 24 168 "
 
 load_backup() {

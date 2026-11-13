@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     dkim_dir: str = "/var/lib/rspamd/dkim"
     tls_dir: str = "/etc/mailsomadhan/tls"
     state_dir: str = "/var/lib/mailsomadhan"
+    # Written only by root (installer/helper). Must not be writable by the panel user: root writing
+    # into a directory the panel controls would allow symlink attacks.
+    status_dir: str = "/var/lib/mailsomadhan-status"
     mail_dir: str = "/var/vmail"
     helper_path: str = "/usr/local/sbin/mailsomadhan-helper"
     features_file: str = "/etc/mailsomadhan/features.conf"

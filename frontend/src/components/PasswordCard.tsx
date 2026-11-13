@@ -4,7 +4,7 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 import { Button, Card, Field, Input, toast } from "@/components/ui";
 
-export function PasswordCard() {
+export function PasswordCard({ minLength = 8 }: { minLength?: number }) {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -37,11 +37,11 @@ export function PasswordCard() {
         <Field label="Current password">
           <Input type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} required />
         </Field>
-        <Field label="New password" hint="At least 8 characters.">
-          <Input type="password" autoComplete="new-password" minLength={8} value={next} onChange={(e) => setNext(e.target.value)} required />
+        <Field label="New password" hint={`At least ${minLength} characters.`}>
+          <Input type="password" autoComplete="new-password" minLength={minLength} value={next} onChange={(e) => setNext(e.target.value)} required />
         </Field>
         <Field label="Confirm new password">
-          <Input type="password" autoComplete="new-password" minLength={8} value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
+          <Input type="password" autoComplete="new-password" minLength={minLength} value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
         </Field>
         <Button type="submit" loading={busy}>Change password</Button>
       </form>

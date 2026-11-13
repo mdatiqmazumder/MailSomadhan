@@ -115,13 +115,13 @@ def _log_tail(lines: int = 200) -> str:
 
 @router.get("/system")
 def system_info():
-    installed = _read_json(Path(settings.state_dir) / "version.json") or {}
+    installed = _read_json(Path(settings.status_dir) / "version.json") or {}
     return {
         "version": installed.get("version", "unknown"),
         "commit": installed.get("commit", ""),
         "installed_at": installed.get("installed_at"),
         "update_running": _update_running(),
-        "last_result": _read_json(Path(settings.state_dir) / "update-result.json"),
+        "last_result": _read_json(Path(settings.status_dir) / "update-result.json"),
     }
 
 
@@ -156,6 +156,6 @@ def start_update():
 def update_status():
     return {
         "running": _update_running(),
-        "result": _read_json(Path(settings.state_dir) / "update-result.json"),
+        "result": _read_json(Path(settings.status_dir) / "update-result.json"),
         "log": _log_tail(),
     }

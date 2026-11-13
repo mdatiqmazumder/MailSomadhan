@@ -4,6 +4,7 @@ import { KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { api, formatDate, useLoad } from "@/lib/api";
+import { useAdmin } from "@/lib/admin";
 import { QuotaPicker, UsageBar } from "@/components/Storage";
 import { Avatar, Button, Card, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Toggle, toast, confirmDialog } from "@/components/ui";
 
@@ -27,8 +28,8 @@ function randomPassword() {
 
 export default function MailboxesPage() {
   const domains = useLoad<Domain[]>("/admin/domains");
-  const settings = useLoad<{ max_mailbox_quota_mb: string }>("/admin/settings");
-  const maxMb = Number(settings.data?.max_mailbox_quota_mb || 10240);
+  const { me, can } = useAdmin();
+  const maxMb = me?.max_mailbox_mb || 10240;
   const { data, loading, reload } = useLoad<Mailbox[]>("/admin/mailboxes");
   const [filter, setFilter] = useState("");
   const [domainFilter, setDomainFilter] = useState("");
@@ -71,7 +72,7 @@ export default function MailboxesPage() {
         title="Mailboxes"
         description="Users sign in to webmail, IMAP and SMTP with their email address and password."
         action={
-          <Button variant="primary" onClick={() => setAdding(true)} disabled={!domains.data?.length}>
+          can("mailboxes.create") && <Button variant="primary" onClick={() => setAdding(true)} disabled={!domains.data?.length}>
             <Plus className="h-4 w-4" /> Add mailbox
           </Button>
         }
@@ -113,16 +114,16 @@ export default function MailboxesPage() {
                 </td>
                 <td className="whitespace-nowrap text-muted">{m.last_login ? formatDate(m.last_login) : "Never"}</td>
                 <td>
-                  <Toggle label={`${m.email} active`} checked={m.active} onChange={(v) => setActive(m, v)} />
+                  <Toggle label={`${m.email} active`} checked={m.active} disabled={!can("mailboxes.edit")} onChange={(v) => setActive(m, v)} />
                 </td>
                 <td>
                   <div className="flex justify-end gap-1">
-                    <IconButton label="Edit mailbox" onClick={() => setEditing(m)}>
+                    {(can("mailboxes.edit") || can("mailboxes.password")) && <IconButton label="Edit mailbox" onClick={() => setEditing(m)}>
                       <Pencil className="h-4 w-4" />
-                    </IconButton>
-                    <IconButton label="Delete mailbox" onClick={() => remove(m)}>
+                    </IconButton>}
+                    {can("mailboxes.delete") && <IconButton label="Delete mailbox" onClick={() => remove(m)}>
                       <Trash2 className="h-4 w-4" />
-                    </IconButton>
+                    </IconButton>}
                   </div>
                 </td>
               </tr>
@@ -168,6 +169,9 @@ function MailboxForm({ domains, mailbox, maxMb, onClose, onSaved }: { domains: D
   // Free pool of the domain; when editing, this mailbox's current quota is available to itself.
   const available = domain ? domain.storage_limit_mb - domain.allocated_mb + (mailbox ? mailbox.quota_mb : 0) : maxMb;
   const [busy, setBusy] = useState(false);
+  const { can } = useAdmin();
+  const canEdit = !mailbox || can("mailboxes.edit");
+  const canPassword = !mailbox || can("mailboxes.password");
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -176,7 +180,7 @@ function MailboxForm({ domains, mailbox, maxMb, onClose, onSaved }: { domains: D
       if (mailbox) {
         await api(`/admin/mailboxes/${mailbox.id}`, {
           method: "PATCH",
-          json: { display_name: displayName, quota_mb: quota, ...(password ? { password } : {}) },
+          json: { ...(canEdit ? { display_name: displayName, quota_mb: quota } : {}), ...(password ? { password } : {}) },
         });
         toast.ok("Mailbox updated");
       } else {
@@ -208,20 +212,20 @@ function MailboxForm({ domains, mailbox, maxMb, onClose, onSaved }: { domains: D
             </div>
           </Field>
         )}
-        <Field label="Display name">
+        {canEdit && <Field label="Display name">
           <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Full name shown to recipients" />
-        </Field>
-        <Field label={mailbox ? "New password" : "Password"} hint={mailbox ? "Leave empty to keep the current password." : "At least 8 characters."}>
+        </Field>}
+        {canPassword && <Field label={mailbox ? "New password" : "Password"} hint={mailbox ? "Leave empty to keep the current password." : "At least 8 characters."}>
           <div className="flex gap-2">
             <Input value={password} onChange={(e) => setPassword(e.target.value)} required={!mailbox} minLength={8} autoComplete="off" className="font-mono" />
             <Button onClick={() => setPassword(randomPassword())} title="Generate a password">
               <KeyRound className="h-4 w-4" /> Generate
             </Button>
           </div>
-        </Field>
-        <Field label="Storage">
+        </Field>}
+        {canEdit && <Field label="Storage">
           <QuotaPicker valueMb={quota} onChange={setQuota} maxMb={maxMb} availableMb={available} domainName={domain?.name} limitMb={domain?.storage_limit_mb} />
-        </Field>
+        </Field>}
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>
           <Button type="submit" variant="primary" loading={busy}>{mailbox ? "Save changes" : "Create mailbox"}</Button>

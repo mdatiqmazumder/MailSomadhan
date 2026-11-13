@@ -37,6 +37,13 @@ export async function api<T = unknown>(path: string, opts: Options = {}): Promis
     window.location.href = "/login";
     throw new ApiError(401, "Session expired");
   }
+  if (res.status === 403 && !opts.noRedirect && !window.location.pathname.startsWith("/admin/account")) {
+    const peek = await res.clone().json().catch(() => ({}));
+    if (peek.detail === "two_factor_setup_required") {
+      window.location.href = "/admin/account?setup2fa=1";
+      throw new ApiError(403, "Two-factor sign-in must be set up first");
+    }
+  }
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -80,8 +87,20 @@ export function useLoad<T>(path: string | null) {
   return { data, error, loading, reload, setData };
 }
 
+export type AdminMe = {
+  kind: "admin";
+  username: string;
+  brand_name: string;
+  role: "super_admin" | "admin";
+  permissions: string[];
+  domains: { id: number; name: string }[] | null;
+  totp_enabled: boolean;
+  require_2fa: boolean;
+  max_mailbox_mb: number;
+};
+
 export type Me =
-  | { kind: "admin"; username: string; brand_name: string }
+  | AdminMe
   | {
       kind: "user";
       email: string;

@@ -16,6 +16,8 @@ export default function LoginPage() {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
+  const [otp, setOtp] = useState("");
+  const [needOtp, setNeedOtp] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -33,10 +35,16 @@ export default function LoginPage() {
     setBusy(true);
     setError("");
     try {
-      const res = await api<{ kind: string }>("/auth/login", { json: { identifier, password }, noRedirect: true });
+      const res = await api<{ kind: string }>("/auth/login", { json: { identifier, password, otp }, noRedirect: true });
       window.location.href = res.kind === "admin" ? "/admin" : "/mail";
     } catch (err) {
-      setError((err as Error).message);
+      const msg = (err as Error).message;
+      if (msg === "otp_required") {
+        setNeedOtp(true);
+        setError("");
+      } else {
+        setError(msg);
+      }
       setBusy(false);
     }
   }
@@ -88,6 +96,11 @@ export default function LoginPage() {
                 </button>
               </div>
             </Field>
+            {needOtp && (
+              <Field label="Verification code" hint="The 6-digit code from your authenticator app.">
+                <Input autoFocus inputMode="numeric" autoComplete="one-time-code" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))} maxLength={6} required className="h-10 font-mono tracking-[0.3em]" placeholder="123456" />
+              </Field>
+            )}
             {error && (
               <p role="alert" className="rounded-lg border border-danger/25 bg-danger-soft px-3 py-2 text-sm text-danger">{error}</p>
             )}

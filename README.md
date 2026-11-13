@@ -43,6 +43,8 @@ curl -fsSL https://raw.githubusercontent.com/mdatiqmazumder/MailSomadhan/main/in
 | Mail queue | See, retry and delete queued mail |
 | Spam filter | Turn the spam filter on or off, set junk and reject scores, greylisting, Redis on/off, and whether subjects are recorded |
 | Updates | Check GitHub for a newer version and install it with one click; a failed update is rolled back automatically |
+| Administrators | Super administrators and limited administrators with chosen permissions on chosen domains; two-factor sign-in |
+| Audit log | Every console change and sign-in, with who, when and from where |
 | Settings | Product name, attachment limit, default quota, admin password |
 
 **Users** (sign in with their email address)
@@ -61,6 +63,10 @@ sudo mailsomadhan logs                   # recent logs
 ```
 
 Files: application in `/opt/mailsomadhan`, configuration and secrets in `/etc/mailsomadhan`, mail in `/var/vmail`, install log in `/var/log/mailsomadhan-install.log`.
+
+## Security
+
+See [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md) for the latest security audit, what was fixed and what is recommended.
 
 ## Updating
 

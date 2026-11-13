@@ -4,6 +4,7 @@ import { Ban, Check, Pause, Play, Plus, Search, Send, Trash2, UserX } from "luci
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api, formatDate, useLoad } from "@/lib/api";
+import { useAdmin } from "@/lib/admin";
 import { type Campaign, STATUS_LABEL, STATUS_TONE, done, pacing } from "@/lib/campaign";
 import {
   Badge, Button, Card, Empty, Field, IconButton, Input, Modal, PageHeader, Pagination, Select, Table, Tabs, Textarea, confirmDialog, toast,
@@ -13,15 +14,16 @@ type Tab = "campaigns" | "suppressions" | "limits";
 
 export default function AdminCampaigns() {
   const [tab, setTab] = useState<Tab>("campaigns");
+  const { isSuper } = useAdmin();
   return (
     <>
       <PageHeader title="Campaigns" description="Individual sending by your users: oversee running campaigns, approve large ones, and manage limits and the do-not-send list." />
       <div className="mb-5">
-        <Tabs value={tab} onChange={setTab} tabs={[{ value: "campaigns", label: "Campaigns" }, { value: "suppressions", label: "Do-not-send list" }, { value: "limits", label: "Limits" }]} />
+        <Tabs value={tab} onChange={setTab} tabs={[{ value: "campaigns", label: "Campaigns" }, { value: "suppressions", label: "Do-not-send list" }, ...(isSuper ? [{ value: "limits" as Tab, label: "Limits" }] : [])]} />
       </div>
       {tab === "campaigns" && <CampaignTable />}
       {tab === "suppressions" && <Suppressions />}
-      {tab === "limits" && <LimitsCard />}
+      {tab === "limits" && isSuper && <LimitsCard />}
     </>
   );
 }

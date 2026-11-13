@@ -3,6 +3,7 @@
 import { CheckCircle2, CircleAlert, HardDrive, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, useLoad } from "@/lib/api";
+import { useAdmin } from "@/lib/admin";
 import { formatMb } from "@/components/Storage";
 import { Badge, Button, Card, CopyText, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Toggle, toast, confirmDialog } from "@/components/ui";
 
@@ -22,8 +23,9 @@ type Relay = { id: number; name: string };
 type DnsRecord = { purpose: string; type: string; host: string; value: string; ok?: boolean; found?: string[] };
 
 export default function DomainsPage() {
+  const { isSuper, can } = useAdmin();
   const { data, loading, reload } = useLoad<Domain[]>("/admin/domains");
-  const relays = useLoad<Relay[]>("/admin/relays");
+  const relays = useLoad<Relay[]>(isSuper ? "/admin/relays" : null);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -73,9 +75,11 @@ export default function DomainsPage() {
         title="Domains"
         description="Each domain gets its own DKIM key and can use its own SMTP relay."
         action={
-          <Button variant="primary" onClick={() => setAdding(true)}>
-            <Plus className="h-4 w-4" /> Add domain
-          </Button>
+          isSuper && (
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              <Plus className="h-4 w-4" /> Add domain
+            </Button>
+          )
         }
       />
       <Card>
@@ -84,13 +88,13 @@ export default function DomainsPage() {
         ) : !data?.length ? (
           <Empty title="No domains yet">Add a domain to start creating mailboxes for it.</Empty>
         ) : (
-          <Table head={["Domain", "Mailboxes", "Storage assigned", "Outbound relay", "Active", ""]} minWidth={860}>
+          <Table head={isSuper ? ["Domain", "Mailboxes", "Storage assigned", "Outbound relay", "Active", ""] : ["Domain", "Mailboxes", "Storage assigned", ""]} minWidth={isSuper ? 860 : 560}>
             {data.map((d) => (
               <tr key={d.id}>
                 <td className="font-medium">{d.name}</td>
                 <td className="tabular-nums">{d.mailboxes}</td>
                 <td>
-                  <button onClick={() => setStorageFor(d)} className="block w-40 text-left" title="Change storage limits">
+                  <button onClick={() => isSuper && setStorageFor(d)} className="block w-40 text-left" title={isSuper ? "Change storage limits" : undefined}>
                     <div className="mb-1 flex justify-between text-xs">
                       <span className="tabular">{formatMb(d.allocated_mb)}</span>
                       <span className="text-muted tabular">of {formatMb(d.storage_limit_mb)}</span>
@@ -101,7 +105,7 @@ export default function DomainsPage() {
                     <span className="mt-0.5 block text-[11px] text-muted">{(d.used_kb / 1024 / 1024).toFixed(d.used_kb > 1024 * 1024 * 10 ? 0 : 2)} GB actually used</span>
                   </button>
                 </td>
-                <td>
+                {isSuper && <td>
                   <Select
                     aria-label={`Relay for ${d.name}`}
                     className="h-8 max-w-44"
@@ -113,17 +117,17 @@ export default function DomainsPage() {
                       <option key={r.id} value={r.id}>{r.name}</option>
                     ))}
                   </Select>
-                </td>
-                <td>
+                </td>}
+                {isSuper && <td>
                   <Toggle label={`${d.name} active`} checked={d.active} onChange={(v) => patch(d, { active: v })} />
-                </td>
+                </td>}
                 <td>
                   <div className="flex justify-end gap-1">
-                    <IconButton label="Storage limits" onClick={() => setStorageFor(d)}><HardDrive className="h-4 w-4" /></IconButton>
-                    <Button size="sm" onClick={() => setDnsFor(d)}>DNS records</Button>
-                    <IconButton label="Delete domain" onClick={() => remove(d)}>
+                    {isSuper && <IconButton label="Storage limits" onClick={() => setStorageFor(d)}><HardDrive className="h-4 w-4" /></IconButton>}
+                    {can("domains.view") && <Button size="sm" onClick={() => setDnsFor(d)}>DNS records</Button>}
+                    {isSuper && <IconButton label="Delete domain" onClick={() => remove(d)}>
                       <Trash2 className="h-4 w-4" />
-                    </IconButton>
+                    </IconButton>}
                   </div>
                 </td>
               </tr>
@@ -153,6 +157,7 @@ export default function DomainsPage() {
 }
 
 function DnsModal({ domain, onClose }: { domain: Domain; onClose: () => void }) {
+  const isSuperAdmin = useAdmin().isSuper;
   const { data, loading, reload, setData } = useLoad<{ records: DnsRecord[] }>(`/admin/domains/${domain.id}/dns`);
   const [checking, setChecking] = useState(false);
 
@@ -200,9 +205,11 @@ function DnsModal({ domain, onClose }: { domain: Domain; onClose: () => void }) 
         </div>
       )}
       <div className="mt-4 flex flex-wrap justify-between gap-2">
-        <Button variant="ghost" onClick={rotate}>
-          <KeyRound className="h-4 w-4" /> Rotate DKIM key
-        </Button>
+        {isSuperAdmin ? (
+          <Button variant="ghost" onClick={rotate}>
+            <KeyRound className="h-4 w-4" /> Rotate DKIM key
+          </Button>
+        ) : <span />}
         <Button onClick={recheck} loading={checking}>
           {!checking && <RefreshCw className="h-4 w-4" />} Check again
         </Button>

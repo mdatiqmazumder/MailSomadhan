@@ -2,33 +2,37 @@
 
 import {
   Activity, AtSign, BarChart3, ChevronsLeft, DatabaseBackup, Download, FileText, Filter, Forward, Gauge, Globe, ListOrdered,
-  LogOut, Mail, Megaphone, Menu as MenuIcon, ScrollText, Send, Server, Settings, ShieldAlert, X,
+  History, LogOut, Mail, Megaphone, Menu as MenuIcon, ScrollText, Send, Server, Settings, ShieldAlert, UserCog, X,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { logout, useMe } from "@/lib/api";
+import { type AdminMe, logout, useMe } from "@/lib/api";
+import { AdminContext } from "@/lib/admin";
 import ThemeToggle from "@/components/ThemeToggle";
 import { Avatar, Menu, MenuItem, Spinner, cx } from "@/components/ui";
 
-const NAV = [
-  { group: "Overview", items: [{ href: "/admin", label: "Dashboard", icon: Gauge }] },
+type Item = { href: string; label: string; icon: typeof Gauge; perm?: string };
+
+// perm: permission needed by limited admins; no perm = super administrators only.
+const NAV: { group: string; items: Item[] }[] = [
+  { group: "Overview", items: [{ href: "/admin", label: "Dashboard", icon: Gauge, perm: "analytics.view" }] },
   {
     group: "Monitoring",
     items: [
-      { href: "/admin/analytics", label: "User analytics", icon: BarChart3 },
-      { href: "/admin/messages", label: "Message log", icon: ScrollText },
-      { href: "/admin/reports", label: "Reports", icon: FileText },
-      { href: "/admin/campaigns", label: "Campaigns", icon: Megaphone },
+      { href: "/admin/analytics", label: "User analytics", icon: BarChart3, perm: "analytics.view" },
+      { href: "/admin/messages", label: "Message log", icon: ScrollText, perm: "analytics.view" },
+      { href: "/admin/reports", label: "Reports", icon: FileText, perm: "analytics.view" },
+      { href: "/admin/campaigns", label: "Campaigns", icon: Megaphone, perm: "campaigns.manage" },
       { href: "/admin/queue", label: "Mail queue", icon: ListOrdered },
     ],
   },
   {
     group: "Mail",
     items: [
-      { href: "/admin/domains", label: "Domains", icon: Globe },
-      { href: "/admin/mailboxes", label: "Mailboxes", icon: AtSign },
-      { href: "/admin/aliases", label: "Aliases", icon: Forward },
+      { href: "/admin/domains", label: "Domains", icon: Globe, perm: "domains.view" },
+      { href: "/admin/mailboxes", label: "Mailboxes", icon: AtSign, perm: "mailboxes.view" },
+      { href: "/admin/aliases", label: "Aliases", icon: Forward, perm: "aliases.manage" },
     ],
   },
   {
@@ -36,6 +40,8 @@ const NAV = [
     items: [
       { href: "/admin/spam", label: "Spam filter", icon: ShieldAlert },
       { href: "/admin/filters", label: "Mail filters", icon: Filter },
+      { href: "/admin/admins", label: "Administrators", icon: UserCog },
+      { href: "/admin/audit", label: "Audit log", icon: History },
     ],
   },
   {
@@ -74,6 +80,24 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     const page = current(pathname);
     if (me) document.title = `${page ? `${page.label} · ` : ""}${me.brand_name} Admin`;
   }, [pathname, me]);
+
+  const admin = me && me.kind === "admin" ? (me as AdminMe) : null;
+  const allowed = (i: Item) => admin?.role === "super_admin" || (!!i.perm && !!admin?.permissions.includes(i.perm));
+  const nav = NAV.map((g) => ({ ...g, items: g.items.filter(allowed) })).filter((g) => g.items.length);
+  const first = nav[0]?.items[0]?.href;
+
+  // A limited admin landing on a page they cannot use goes to their first allowed page;
+  // anyone who must set up two-factor sign-in goes to their account page first.
+  useEffect(() => {
+    if (!admin || pathname.startsWith("/admin/account")) return;
+    if (admin.require_2fa && !admin.totp_enabled) {
+      window.location.replace("/admin/account?setup2fa=1");
+      return;
+    }
+    const page = current(pathname);
+    if (page && !allowed(page) && first) window.location.replace(first);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [admin, pathname, first]);
 
   if (!me || me.kind !== "admin") {
     return (
@@ -114,7 +138,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         )}
       </div>
       <nav className="min-h-0 flex-1 overflow-y-auto px-2.5 py-3" aria-label="Admin">
-        {NAV.map((g) => (
+        {nav.map((g) => (
           <div key={g.group} className="mb-4">
             {(!collapsed || mobile) && <p className="mb-1 px-2.5 text-[11px] font-semibold tracking-wider text-faint uppercase">{g.group}</p>}
             {g.items.map(({ href, label, icon: Icon }) => {
@@ -166,9 +190,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <MenuIcon className="h-5 w-5" />
           </button>
           <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-sm">
-            <span className="hidden text-muted sm:inline">{page?.group || "Admin"}</span>
+            <span className="hidden text-muted sm:inline">{page?.group || (pathname.startsWith("/admin/account") ? "Account" : "Admin")}</span>
             <span className="hidden text-faint sm:inline">/</span>
-            <span className="truncate font-medium">{page?.label || "Admin"}</span>
+            <span className="truncate font-medium">{page?.label || (pathname.startsWith("/admin/account") ? "My account" : "Admin")}</span>
           </nav>
           <span className="flex-1" />
           <span className="hidden items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs text-muted md:inline-flex">
@@ -187,10 +211,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               <>
                 <div className="border-b border-border px-2.5 pt-1.5 pb-2.5">
                   <p className="text-sm font-medium">{me.username}</p>
-                  <p className="text-xs text-muted">Administrator</p>
+                  <p className="text-xs text-muted">{admin?.role === "super_admin" ? "Super administrator" : `Administrator · ${admin?.domains?.map((d) => d.name).join(", ")}`}</p>
                 </div>
                 <div className="pt-1">
-                  <MenuItem onClick={() => { close(); window.location.href = "/admin/settings"; }}>Settings & password</MenuItem>
+                  <MenuItem onClick={() => { close(); window.location.href = "/admin/account"; }}>My account & security</MenuItem>
                   <MenuItem danger onClick={logout}>
                     <span className="flex items-center gap-2"><LogOut className="h-4 w-4" /> Sign out</span>
                   </MenuItem>
@@ -200,7 +224,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </Menu>
         </header>
         <main className="min-w-0 flex-1 px-4 py-6 lg:px-8 lg:py-8">
-          <div className="mx-auto max-w-[1280px]">{children}</div>
+          <div className="mx-auto max-w-[1280px]">
+            {admin && admin.require_2fa && !admin.totp_enabled && !pathname.startsWith("/admin/account") ? null : (
+              <AdminContext.Provider value={admin}>{children}</AdminContext.Provider>
+            )}
+          </div>
         </main>
       </div>
     </div>

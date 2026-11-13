@@ -282,6 +282,7 @@ MAILSOMADHAN_SMTP_PORT=10025
 MAILSOMADHAN_DKIM_DIR=$DKIM_DIR
 MAILSOMADHAN_TLS_DIR=$TLS_DIR
 MAILSOMADHAN_STATE_DIR=$STATE_DIR
+MAILSOMADHAN_STATUS_DIR=/var/lib/mailsomadhan-status
 MAILSOMADHAN_MAIL_DIR=$MAIL_DIR
 MAILSOMADHAN_FEATURES_FILE=$ETC_DIR/features.conf
 EOF
@@ -590,6 +591,22 @@ sievec /etc/dovecot/sieve/spam-to-junk.sieve
 # --------------------------------------------------------------------------- Rspamd
 step "Configuring Rspamd (spam filter and DKIM signing)"
 install -d /etc/rspamd/local.d
+# Rspamd's web controller listens on localhost only; replace the distribution's default password.
+if [ -z "${RSPAMD_PASS:-}" ]; then
+  RSPAMD_PASS="$(openssl rand -hex 24)"
+  echo "RSPAMD_PASS='$RSPAMD_PASS'" >> "$INSTALL_CONF"
+fi
+RSPAMD_HASH="$(rspamadm pw -p "$RSPAMD_PASS" 2>/dev/null | tail -n1)"
+cat > /etc/rspamd/local.d/worker-controller.inc <<EOF
+bind_socket = "127.0.0.1:11334";
+password = "$RSPAMD_HASH";
+enable_password = "$RSPAMD_HASH";
+# No password-free access for local processes either (the default trusts 127.0.0.1).
+secure_ip = [];
+EOF
+chmod 640 /etc/rspamd/local.d/worker-controller.inc
+chgrp _rspamd /etc/rspamd/local.d/worker-controller.inc
+
 cat > /etc/rspamd/local.d/worker-proxy.inc <<'EOF'
 bind_socket = "127.0.0.1:11332";
 milter = yes;
@@ -668,7 +685,10 @@ WantedBy=multi-user.target
 EOF
 
 # Mail log collector: turns Postfix/Rspamd logs into the analytics tables.
-usermod -aG systemd-journal,adm mailsomadhan
+# Only the collector service gets log access (SupplementaryGroups in its unit); the internet-facing
+# API runs without it. Older installs added these groups to the user itself: remove them.
+gpasswd -d mailsomadhan adm >/dev/null 2>&1 || true
+gpasswd -d mailsomadhan systemd-journal >/dev/null 2>&1 || true
 cat > /etc/systemd/system/mailsomadhan-collector.service <<EOF
 [Unit]
 Description=MailSomadhan mail log collector
@@ -825,11 +845,21 @@ maxretry = 8
 EOF
 
 # --------------------------------------------------------------------------- version info
+STATUS_DIR=/var/lib/mailsomadhan-status
+install -d -o root -g root -m 755 "$STATUS_DIR"
+for f in version.json update-result.json backup-status.json backup-settings.json; do
+  if [ -e "$STATE_DIR/$f" ] || [ -L "$STATE_DIR/$f" ]; then
+    if [ ! -e "$STATUS_DIR/$f" ] && [ -f "$STATE_DIR/$f" ] && [ ! -L "$STATE_DIR/$f" ]; then
+      install -m 644 "$STATE_DIR/$f" "$STATUS_DIR/$f"
+    fi
+    rm -f "$STATE_DIR/$f"
+  fi
+done
 SRC_COMMIT="$(git -C "$SRC_DIR" rev-parse HEAD 2>/dev/null || echo local)"
-cat > "$STATE_DIR/version.json" <<EOF
+cat > "$STATUS_DIR/version.json" <<EOF
 {"version": "$(tr -dc '0-9A-Za-z.+-' < "$SRC_DIR/VERSION" 2>/dev/null || echo unknown)", "commit": "$SRC_COMMIT", "installed_at": "$(date -Is)"}
 EOF
-chmod 644 "$STATE_DIR/version.json"
+chmod 644 "$STATUS_DIR/version.json"
 [ -f /var/log/mailsomadhan-update.log ] || install -m 640 -g mailsomadhan /dev/null /var/log/mailsomadhan-update.log
 [ -f /var/log/mailsomadhan-backup.log ] || install -m 640 -g mailsomadhan /dev/null /var/log/mailsomadhan-backup.log
 # Keep the backup schedule in sync with the saved settings (no-op until backups are configured).

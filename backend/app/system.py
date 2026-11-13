@@ -28,7 +28,9 @@ DEFAULT_SETTINGS = {
     "campaign_daily_limit": "150",         # messages per user in any 24 hours
     "campaign_max_recipients": "1000",     # recipients per campaign
     "campaign_domain_hourly_limit": "20",  # messages per recipient domain per hour, per sender
-    "campaign_approval_over": "0",         # campaigns larger than this need admin approval (0 = never)
+    "campaign_approval_over": "0",
+    "require_admin_2fa": "0",
+    "admin_allowed_networks": "",           # comma separated CIDRs allowed to use the console; empty = any               # 1 = every console account must use two-factor sign-in         # campaigns larger than this need admin approval (0 = never)
 }
 
 SERVICES = ["postfix", "dovecot", "rspamd", "redis-server", "postgresql", "nginx", "fail2ban",

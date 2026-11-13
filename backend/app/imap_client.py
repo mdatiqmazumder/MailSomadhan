@@ -94,7 +94,13 @@ def encode_mutf7(name: str) -> str:
     return "".join(out)
 
 
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
 def quote(name: str) -> str:
+    # Folder names come from the browser: a CR/LF would let a request inject extra IMAP commands.
+    if CONTROL_RE.search(name) or len(name) > 200:
+        raise MailError("Invalid folder name")
     return '"' + encode_mutf7(name).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 

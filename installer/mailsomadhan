@@ -37,6 +37,10 @@ case "${1:-help}" in
   logs)
     journalctl -u mailsomadhan-api -u mailsomadhan-web -u postfix@- -u dovecot -u rspamd -n "${2:-100}" --no-pager
     ;;
+  open-console)
+    need_root open-console
+    cli open-console
+    ;;
   reset-admin-password)
     need_root reset-admin-password
     password="$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-20)"
@@ -66,6 +70,7 @@ Usage: mailsomadhan <command>
   restart                restart every service
   logs [lines]           show recent log output
   reset-admin-password   generate a new password for the admin user
+  open-console           remove the console IP allowlist (if you locked yourself out)
   update                 pull the latest version and re-apply the installation
 EOF
     ;;

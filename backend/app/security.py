@@ -1,6 +1,4 @@
 import re
-import time
-from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -16,11 +14,21 @@ LOCAL_RE = re.compile(r"^[a-z0-9]([a-z0-9._+-]{0,62}[a-z0-9])?$")
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]{1,64}@([A-Za-z0-9-]+\.)+[A-Za-z]{2,63}$")
 
 
-def check_password_rules(password: str) -> str | None:
-    if len(password) < 8:
-        return "Password must be at least 8 characters"
+COMMON_PASSWORDS = {
+    "password", "password1", "password123", "12345678", "123456789", "1234567890", "qwerty123", "qwertyuiop",
+    "iloveyou", "admin123", "administrator", "welcome1", "welcome123", "letmein1", "11111111", "00000000",
+    "abc12345", "passw0rd", "p@ssw0rd", "changeme", "football", "baseball", "sunshine", "princess",
+}
+
+
+def check_password_rules(password: str, admin: bool = False) -> str | None:
+    minimum = 12 if admin else 8
+    if len(password) < minimum:
+        return f"Password must be at least {minimum} characters"
     if len(password.encode()) > 72:
         return "Password must be at most 72 bytes"
+    if password.lower() in COMMON_PASSWORDS or len(set(password)) < 4:
+        return "This password is too easy to guess"
     return None
 
 
@@ -37,43 +45,41 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
-def make_token(kind: str, ident: int) -> str:
+def make_token(kind: str, ident: int, version: int = 0) -> str:
     exp = datetime.now(timezone.utc) + timedelta(hours=settings.token_hours)
-    return jwt.encode({"sub": f"{kind}:{ident}", "exp": exp}, settings.secret_key, algorithm="HS256")
+    return jwt.encode({"sub": f"{kind}:{ident}", "v": version, "exp": exp}, settings.secret_key, algorithm="HS256")
 
 
-def read_token(token: str) -> tuple[str, int] | None:
+def read_token(token: str) -> tuple[str, int, int] | None:
     try:
-        data = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
+        data = jwt.decode(token, settings.secret_key, algorithms=["HS256"], options={"require": ["exp", "sub"]})
         kind, ident = data["sub"].split(":", 1)
-        return kind, int(ident)
+        return kind, int(ident), int(data.get("v", 0))
     except Exception:
         return None
 
 
-class LoginLimiter:
-    """In-memory failed-login limiter (per client IP). fail2ban handles long bans."""
-
-    def __init__(self, max_failures: int = 8, window: int = 900):
-        self.max = max_failures
-        self.window = window
-        self.failures: dict[str, deque] = defaultdict(deque)
-
-    def _trim(self, ip: str) -> deque:
-        q = self.failures[ip]
-        cutoff = time.time() - self.window
-        while q and q[0] < cutoff:
-            q.popleft()
-        return q
-
-    def blocked(self, ip: str) -> bool:
-        return len(self._trim(ip)) >= self.max
-
-    def fail(self, ip: str) -> None:
-        self._trim(ip).append(time.time())
-
-    def reset(self, ip: str) -> None:
-        self.failures.pop(ip, None)
+# ---------------------------------------------------------------- sign-in throttling
+# Stored in the database so every API worker sees the same counts; fail2ban adds long bans.
+IP_LIMIT, ACCOUNT_LIMIT, WINDOW_MINUTES = 10, 15, 15
 
 
-login_limiter = LoginLimiter()
+def login_blocked(db, ip: str, identifier: str) -> bool:
+    from .models import LoginFailure
+    since = datetime.now(timezone.utc) - timedelta(minutes=WINDOW_MINUTES)
+    recent = db.query(LoginFailure).filter(LoginFailure.at >= since)
+    return (recent.filter(LoginFailure.ip == ip).count() >= IP_LIMIT
+            or recent.filter(LoginFailure.identifier == identifier).count() >= ACCOUNT_LIMIT)
+
+
+def record_login_failure(db, ip: str, identifier: str) -> None:
+    from .models import LoginFailure
+    db.add(LoginFailure(ip=ip, identifier=identifier[:320]))
+    db.query(LoginFailure).filter(LoginFailure.at < datetime.now(timezone.utc) - timedelta(days=2)).delete()
+    db.commit()
+
+
+def clear_login_failures(db, ip: str, identifier: str) -> None:
+    from .models import LoginFailure
+    db.query(LoginFailure).filter((LoginFailure.ip == ip) | (LoginFailure.identifier == identifier)).delete()
+    db.commit()
