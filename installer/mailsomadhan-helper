@@ -670,6 +670,14 @@ PY
     [ -s "$CF_INI" ] || die "connect Cloudflare first"
     exec python3 /usr/local/sbin/mailsomadhan-cloudflare "${cmd#cf-dns-}" "$domain" "$selector"
     ;;
+  cf-host-lookup|cf-host-apply)
+    # cf-host-lookup|cf-host-apply <hostname>: A / AAAA of one of this server's hostnames.
+    host="${1:-}"
+    valid_host "$host" || die "invalid hostname"
+    [ "$host" = "$MAIL_HOSTNAME" ] || list_hosts | grep -qxF "$host" || die "unknown host: add it in the panel first"
+    [ -s "$CF_INI" ] || die "connect Cloudflare first"
+    exec python3 /usr/local/sbin/mailsomadhan-cloudflare "host-${cmd#cf-host-}" "$host"
+    ;;
   tls-cloudflare-remove)
     rm -f "$CF_INI" "$CF_STATE"
     echo "removed"

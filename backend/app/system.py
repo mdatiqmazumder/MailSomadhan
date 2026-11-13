@@ -289,3 +289,85 @@ def dns_records(domain: Domain, primary_host: str, check: bool = True) -> list[d
             rec["ok"] = bool(found)
         rec["found"] = found
     return records
+
+
+# ---------- server identity (A / AAAA / reverse DNS) ----------
+def server_ips() -> dict:
+    """The public addresses this server sends mail from: the source address the kernel picks for
+    an outbound connection. A UDP "connect" sends no packet. Private addresses (a server behind
+    NAT) are not returned, because the public one cannot be known from inside; `ipv4_nat` is then
+    True and the A record must be checked by the name alone."""
+    import ipaddress
+    import socket
+
+    out: dict = {"ipv4": None, "ipv6": None, "ipv4_nat": False}
+    for key, family, target in (("ipv4", socket.AF_INET, "192.0.2.1"), ("ipv6", socket.AF_INET6, "2001:db8::1")):
+        try:
+            with socket.socket(family, socket.SOCK_DGRAM) as s:
+                s.connect((target, 53))
+                ip = s.getsockname()[0].split("%")[0]
+            if ipaddress.ip_address(ip).is_global:
+                out[key] = ip
+            elif key == "ipv4" and ipaddress.ip_address(ip).is_private:
+                out["ipv4_nat"] = True
+        except OSError:
+            pass
+    return out
+
+
+def _ptr(ip: str) -> list[str]:
+    import dns.reversename
+
+    try:
+        resolver = dns.resolver.Resolver()
+        resolver.lifetime = 4
+        return [str(r.target).rstrip(".").lower() for r in resolver.resolve(dns.reversename.from_address(ip), "PTR")]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def host_identity(hostname: str, is_primary: bool) -> dict:
+    """What a hostname needs in DNS to reach this server, and (for the primary host, the name
+    every outgoing message is sent under) whether reverse DNS matches. Receivers such as Gmail
+    reject mail whose sending IP has no PTR record or whose PTR name does not resolve back to it."""
+    ips = server_ips()
+    records = []
+    for rtype, key in (("A", "ipv4"), ("AAAA", "ipv6")):
+        found = [f.lower() for f in _resolve(hostname, rtype)]
+        want = ips[key]
+        rec = {"type": rtype, "name": hostname, "value": want, "found": found}
+        if want:
+            rec["ok"] = want.lower() in found
+        elif key == "ipv4" and ips["ipv4_nat"]:
+            # Behind NAT: the public IPv4 is not visible from here, so only check that a record exists.
+            rec["ok"] = bool(found)
+            rec["note"] = ("This server is behind NAT, so its public IPv4 address cannot be detected. "
+                           + (f"{hostname} points to {', '.join(found)}; make sure that is this server's public address." if found
+                              else f"Add an A record for {hostname} with the server's public IPv4 address."))
+        else:
+            # No public address of this family here: a record of that type must not exist either,
+            # otherwise clients and receivers try an address that is not this server.
+            rec["ok"] = not found
+            if found:
+                rec["note"] = f"This server has no public {'IPv4' if key == 'ipv4' else 'IPv6'} address, but the record exists; remove it."
+        records.append(rec)
+    ptr = []
+    if is_primary:
+        for key in ("ipv4", "ipv6"):
+            ip = ips[key]
+            if not ip and key == "ipv4" and ips["ipv4_nat"]:
+                ip = next((r["found"][0] for r in records if r["type"] == "A" and r["found"]), None)
+            if not ip:
+                continue
+            names = _ptr(ip)
+            forward = next(r for r in records if r["type"] == ("A" if key == "ipv4" else "AAAA"))
+            entry = {"ip": ip, "family": key, "found": names, "ok": hostname.lower() in names and forward["ok"]}
+            if not names:
+                entry["note"] = "No reverse DNS (PTR) record. Set it to the primary hostname in your hosting provider's control panel."
+            elif hostname.lower() not in names:
+                entry["note"] = f"Reverse DNS points to {names[0]}, not {hostname}. Change it at your hosting provider."
+            elif not forward["ok"]:
+                entry["note"] = (f"Reverse DNS is right, but {hostname} has no {forward['type']} record for {ip}. "
+                                 "Receivers check both directions, so add that record.")
+            ptr.append(entry)
+    return {"host": hostname, "ips": ips, "records": records, "ptr": ptr}

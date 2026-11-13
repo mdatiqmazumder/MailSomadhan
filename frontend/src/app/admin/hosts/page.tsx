@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { api, formatDate, useLoad } from "@/lib/api";
 import { Badge, Button, Card, CopyText, Field, IconButton, Input, Modal, PageHeader, Spinner, Table, toast, confirmDialog } from "@/components/ui";
 import { CloudflareConnect } from "@/components/CloudflareConnect";
+import { HostDnsModal, IdentityBanner } from "@/components/HostDns";
 
 type Host = {
   id: number;
@@ -47,6 +48,8 @@ export default function HostsPage() {
   const [hostname, setHostname] = useState("");
   const [busy, setBusy] = useState(false);
   const [target, setTarget] = useState<Host | null>(null);
+  const [dnsFor, setDnsFor] = useState<Host | null>(null);
+  const primary = data?.find((h) => h.is_primary);
 
   async function loadTls() {
     try {
@@ -113,6 +116,7 @@ export default function HostsPage() {
         }
       />
 
+      {primary && <IdentityBanner key={dnsFor ? "open" : "closed"} primary={primary} onOpen={() => setDnsFor(primary)} />}
       {tls?.job && <JobCard info={tls} onChange={setTls} />}
 
       <Card>
@@ -135,6 +139,7 @@ export default function HostsPage() {
                 <td className="whitespace-nowrap text-muted">{h.tls.expires ? formatDate(h.tls.expires) : "—"}</td>
                 <td>
                   <div className="flex justify-end gap-1">
+                    <Button size="sm" onClick={() => setDnsFor(h)}>DNS</Button>
                     <Button size="sm" disabled={!!active} onClick={() => setTarget(h)}>
                       {h.tls.status === "trusted" ? "Renew" : "Issue certificate"}
                     </Button>
@@ -167,6 +172,8 @@ export default function HostsPage() {
           </form>
         </Modal>
       )}
+
+      {dnsFor && <HostDnsModal host={dnsFor} onClose={() => setDnsFor(null)} />}
 
       {target && tls && (
         <IssueModal host={target} info={tls} onClose={() => setTarget(null)} onStarted={(t) => { setTls(t); setTarget(null); }} onInfo={setTls} />

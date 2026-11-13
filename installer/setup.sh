@@ -390,6 +390,7 @@ postconf -e \
   'mynetworks = 127.0.0.0/8 [::1]/128' \
   'inet_interfaces = all' \
   'inet_protocols = all' \
+  'smtp_address_preference = ipv4' \
   'biff = no' \
   'append_dot_mydomain = no' \
   'recipient_delimiter = +' \

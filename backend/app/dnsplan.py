@@ -47,6 +47,56 @@ def _fresh(existing: list[dict], want: dict, same) -> list[dict]:
     return changes
 
 
+def _points_here(r: dict, ip: str) -> bool:
+    # A Cloudflare-proxied (orange cloud) record hides the server: SMTP and IMAP cannot pass the proxy.
+    return r["content"].lower() == ip.lower() and not r.get("proxied")
+
+
+def host_plan(host: str, ips: dict, existing: list[dict]) -> list[dict]:
+    """A / AAAA records that make `host` reach this server. A record of the right family that
+    points elsewhere is only replaced with the admin's OK (the name may serve something else)."""
+    out = []
+    for rtype, key in (("A", "ipv4"), ("AAAA", "ipv6")):
+        ip = ips.get(key)
+        cur = [r for r in existing if r["type"] == rtype and r["name"].lower() == host.lower()]
+        family = "IPv4" if key == "ipv4" else "IPv6"
+        entry = {"purpose": rtype, "record": {"type": rtype, "name": host, "content": ip or ""},
+                 "current": [r["content"] for r in cur]}
+        if not ip and key == "ipv4" and ips.get("ipv4_nat"):
+            entry.update(status="ok" if cur else "manual", selected=False, changes=[],
+                         summary=f"This server is behind NAT, so its public IPv4 address cannot be detected; the A record is left as it is."
+                         + ("" if cur else " Add it by hand with the server's public IPv4 address."))
+        elif not ip:
+            if cur:
+                entry.update(status="replace", selected=False,
+                             summary=f"This server has no public {family} address, yet {host} has an {rtype} record. "
+                                     "Mail servers may try that address and fail; remove it.",
+                             changes=[{"op": "delete", "id": r["id"]} for r in cur])
+            else:
+                entry.update(status="ok", selected=False, changes=[],
+                             summary=f"This server has no public {family} address, so no {rtype} record is needed.")
+        elif any(_points_here(r, ip) for r in cur):
+            others = [r for r in cur if not _points_here(r, ip)]
+            entry.update(status="ok" if not others else "replace", selected=False,
+                         summary=f"{host} points to this server ({ip})." if not others else
+                         f"{host} points to this server and also to {', '.join(r['content'] for r in others)}; remove the others.",
+                         changes=[{"op": "delete", "id": r["id"]} for r in others])
+        elif not cur:
+            entry.update(status="create", selected=True, summary=f"Point {host} to this server's {family} address {ip}.",
+                         changes=[{"op": "create", "type": rtype, "name": host, "content": ip}])
+        else:
+            entry.update(status="replace", selected=False,
+                         summary=(f"{host} is proxied by Cloudflare (orange cloud); mail clients and servers cannot connect through the proxy. "
+                                  "Replace it with a DNS-only record." if any(r.get("proxied") for r in cur) else
+                                  f"{host} points to another address. Replacing it sends {family} traffic for this name to this server."),
+                         changes=[{"op": "delete", "id": r["id"]} for r in cur]
+                         + [{"op": "create", "type": rtype, "name": host, "content": ip}])
+        entry["fresh"] = []
+        entry["can_replace"] = False
+        out.append(entry)
+    return out
+
+
 def plan(domain: str, primary_host: str, selector: str, dkim_public: str, existing: list[dict]) -> list[dict]:
     """Returns one entry per mail record:
     {purpose, status: ok|create|update|replace|kept, summary, current[], selected, changes[]}

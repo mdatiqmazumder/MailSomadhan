@@ -9,6 +9,8 @@ so a compromised panel cannot use the token to rewrite arbitrary DNS records.
   mailsomadhan-cloudflare verify                       token on stdin; checks it with Cloudflare
   mailsomadhan-cloudflare lookup <domain> <selector>   zone and current mail records (JSON)
   mailsomadhan-cloudflare apply <domain> <selector>    JSON list of changes on stdin
+  mailsomadhan-cloudflare host-lookup <host>           A / AAAA records of one of our hostnames
+  mailsomadhan-cloudflare host-apply <host>            create / delete them (only our own addresses)
 """
 import json
 import os
@@ -185,8 +187,95 @@ def apply(token: str, zone: dict, domain: str, selector: str, changes: list) -> 
     return done
 
 
+def server_ips() -> set[str]:
+    """Public addresses this server sends from (the kernel's source address; a UDP connect sends
+    nothing). A/AAAA records may only point here."""
+    import ipaddress
+    import socket
+
+    override = os.environ.get("MAILSOMADHAN_SERVER_IPS")  # tests only; sudo never passes it
+    if override is not None:
+        return {ip.strip().lower() for ip in override.split(",") if ip.strip()}
+    ips = set()
+    for family, target in ((socket.AF_INET, "192.0.2.1"), (socket.AF_INET6, "2001:db8::1")):
+        try:
+            with socket.socket(family, socket.SOCK_DGRAM) as s:
+                s.connect((target, 53))
+                ip = s.getsockname()[0].split("%")[0]
+            if ipaddress.ip_address(ip).is_global:
+                ips.add(str(ipaddress.ip_address(ip)))
+        except OSError:
+            pass
+    return ips
+
+
+def host_lookup(token: str, zone: dict, host: str) -> list[dict]:
+    records = []
+    for rtype in ("A", "AAAA"):
+        res = call(token, "GET", f"/zones/{zone['id']}/dns_records", {"type": rtype, "name": host, "per_page": 100})
+        for r in res.get("result") or []:
+            records.append({"id": r["id"], "type": r["type"], "name": r["name"].lower(),
+                            "content": r["content"].lower(), "proxied": bool(r.get("proxied"))})
+    return records
+
+
+def host_apply(token: str, zone: dict, host: str, changes: list) -> list[str]:
+    """A / AAAA for one of this server's hostnames, pointing only at this server's own addresses."""
+    import ipaddress
+
+    if host not in allowed_mx_targets():
+        die(f"{host} is not one of this server's hostnames")
+    ips = server_ips()
+    existing = {r["id"]: r for r in host_lookup(token, zone, host)}
+    if not isinstance(changes, list) or len(changes) > 10:
+        die("invalid change list")
+    for c in changes:
+        op = c.get("op")
+        if op == "delete":
+            if not ID_RE.match(str(c.get("id", ""))) or c["id"] not in existing:
+                die("unknown record")
+        elif op == "create":
+            rtype, content = str(c.get("type")), str(c.get("content", "")).lower()
+            if rtype not in ("A", "AAAA") or str(c.get("name", "")).lower() != host:
+                die("only A and AAAA records of the hostname itself can be created")
+            try:
+                ip = ipaddress.ip_address(content)
+            except ValueError:
+                die("invalid address")
+            if (rtype == "A") != (ip.version == 4) or str(ip) not in ips:
+                die("A and AAAA records may only point to this server's own public addresses")
+        else:
+            die("invalid operation")
+    done = []
+    base = f"/zones/{zone['id']}/dns_records"
+    for c in changes:
+        if c["op"] == "delete":
+            call(token, "DELETE", f"{base}/{c['id']}")
+            done.append(f"removed {existing[c['id']]['type']} {host}")
+        else:
+            call(token, "POST", base, body={"type": c["type"], "name": host, "content": str(c["content"]).lower(),
+                                             "ttl": 1, "proxied": False, "comment": "MailSomadhan"})
+            done.append(f"created {c['type']} {host}")
+    return done
+
+
 def main() -> None:
     args = sys.argv[1:]
+    if len(args) == 2 and args[0] in ("host-lookup", "host-apply"):
+        host = args[1].lower()
+        if len(host) > 253 or not HOST_RE.match(host):
+            die("invalid hostname")
+        token = read_token()
+        zone = find_zone(token, host)
+        if args[0] == "host-lookup":
+            print(json.dumps({"zone": zone, "records": host_lookup(token, zone, host)}))
+        else:
+            try:
+                changes = json.loads(sys.stdin.read(50_000))
+            except ValueError:
+                die("invalid change list")
+            print(json.dumps({"zone": zone, "done": host_apply(token, zone, host, changes)}))
+        return
     if args == ["verify"]:
         token = sys.stdin.read(300).strip()
         if not TOKEN_RE.match(token):

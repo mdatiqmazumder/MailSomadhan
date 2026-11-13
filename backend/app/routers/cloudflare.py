@@ -1,7 +1,8 @@
 """Automatic DNS setup through Cloudflare.
 
 The admin connects Cloudflare once with an API token (the same token is used for certificates
-over DNS). Then each domain's MX, SPF, DKIM and DMARC records can be created with one click.
+over DNS). Then each domain's MX, SPF, DKIM and DMARC records, and the A / AAAA records of the
+server's own hostnames, can be created with one click.
 The token stays root-only: every Cloudflare call goes through the privileged helper, which
 accepts nothing but the mail records of the domain in question.
 """
@@ -15,9 +16,9 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..db import get_db
 from ..deps import require_admin
-from ..dnsplan import plan
+from ..dnsplan import host_plan, plan
 from ..models import Domain, Host
-from ..system import run_helper
+from ..system import host_identity, run_helper, server_ips
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -162,3 +163,59 @@ def apply_plan(domain_id: int, body: ApplyIn, db: Session = Depends(get_db)):
         return {"done": [], **current}
     result = _apply(domain, changes)
     return {"done": result.get("done", []), **domain_plan(db, domain)}
+
+
+# ---------------------------------------------------------------- hostnames (A / AAAA, reverse DNS)
+def _host(db: Session, host_id: int) -> Host:
+    host = db.get(Host, host_id)
+    if not host:
+        raise HTTPException(404, "Host not found")
+    return host
+
+
+def _host_lookup(host: Host) -> dict:
+    if settings.dev_mode:
+        if not _DEV["configured"]:
+            raise HTTPException(400, "connect Cloudflare first")
+        return {"zone": {"id": "dev", "name": host.hostname.split(".", 1)[-1]},
+                "records": [dict(r) for r in _DEV["records"] if r["type"] in ("A", "AAAA")]}
+    return _helper_json("cf-host-lookup", host.hostname)
+
+
+def _host_apply(host: Host, changes: list[dict]) -> dict:
+    if settings.dev_mode:
+        return _apply(host, changes)  # the in-memory stand-in handles any record type
+    return _helper_json("cf-host-apply", host.hostname, stdin=json.dumps(changes))
+
+
+def host_cf_plan(host: Host) -> dict:
+    found = _host_lookup(host)
+    return {"zone": found["zone"]["name"], "records": host_plan(host.hostname, server_ips(), found["records"])}
+
+
+@router.get("/hosts/{host_id}/dns")
+def host_dns(host_id: int, db: Session = Depends(get_db)):
+    """A / AAAA records the hostname needs and, for the primary host, the reverse DNS check."""
+    host = _host(db, host_id)
+    return host_identity(host.hostname, host.is_primary)
+
+
+@router.get("/hosts/{host_id}/cloudflare")
+def host_get_plan(host_id: int, db: Session = Depends(get_db)):
+    return host_cf_plan(_host(db, host_id))
+
+
+class HostApplyIn(BaseModel):
+    purposes: list[str] = Field(min_length=1, max_length=2)
+
+
+@router.post("/hosts/{host_id}/cloudflare")
+def host_apply_plan(host_id: int, body: HostApplyIn, db: Session = Depends(get_db)):
+    host = _host(db, host_id)
+    wanted = {p for p in body.purposes if p in ("A", "AAAA")}
+    current = host_cf_plan(host)  # recomputed from the live zone
+    changes = [c for e in current["records"] if e["purpose"] in wanted for c in e["changes"]]
+    if not changes:
+        return {"done": [], **current}
+    result = _host_apply(host, changes)
+    return {"done": result.get("done", []), **host_cf_plan(host)}
