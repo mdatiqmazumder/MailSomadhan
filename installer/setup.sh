@@ -693,6 +693,29 @@ ProtectHome=yes
 WantedBy=multi-user.target
 EOF
 
+# Campaign worker: sends individually addressed campaign mail at the requested pace.
+cat > /etc/systemd/system/mailsomadhan-campaigns.service <<EOF
+[Unit]
+Description=MailSomadhan campaign sender
+After=network.target postgresql.service postfix.service
+Wants=postgresql.service
+
+[Service]
+User=mailsomadhan
+Group=mailsomadhan
+WorkingDirectory=$SRC_DIR/backend
+Environment=MAILSOMADHAN_ENV_FILE=$ENV_FILE
+Environment=PYTHONUNBUFFERED=1
+ExecStart=$APP_DIR/venv/bin/python -m app.campaign_worker
+Restart=always
+RestartSec=5
+PrivateTmp=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 cat > /etc/systemd/system/mailsomadhan-web.service <<EOF
 [Unit]
 Description=MailSomadhan web panel
@@ -821,8 +844,8 @@ systemctl enable -q rspamd dovecot postfix nginx mailsomadhan-api mailsomadhan-w
 systemctl restart dovecot
 systemctl restart postfix
 systemctl restart mailsomadhan-api mailsomadhan-web
-systemctl enable -q mailsomadhan-collector 2>/dev/null || true
-systemctl restart mailsomadhan-collector
+systemctl enable -q mailsomadhan-collector mailsomadhan-campaigns 2>/dev/null || true
+systemctl restart mailsomadhan-collector mailsomadhan-campaigns
 /usr/local/sbin/mailsomadhan-helper tls-sync >/dev/null
 systemctl restart nginx
 systemctl enable -q fail2ban 2>/dev/null || true
@@ -869,7 +892,7 @@ fi
 # --------------------------------------------------------------------------- health check
 sleep 2
 problems=""
-check_svcs="postfix dovecot rspamd postgresql nginx mailsomadhan-api mailsomadhan-web mailsomadhan-collector"
+check_svcs="postfix dovecot rspamd postgresql nginx mailsomadhan-api mailsomadhan-web mailsomadhan-collector mailsomadhan-campaigns"
 if ! grep -q '^REDIS=0' "$ETC_DIR/features.conf" 2>/dev/null; then check_svcs="$check_svcs redis-server"; fi
 for svc in $check_svcs; do
   systemctl is-active -q "$svc" || problems="$problems $svc"

@@ -484,6 +484,10 @@ class SettingsIn(BaseModel):
     max_attachment_mb: int | None = Field(default=None, ge=1, le=200)
     default_quota_mb: int | None = Field(default=None, ge=1, le=1024 * 1024)
     acme_email: str | None = Field(default=None, max_length=320)
+    campaign_daily_limit: int | None = Field(default=None, ge=1, le=100000)
+    campaign_max_recipients: int | None = Field(default=None, ge=1, le=100000)
+    campaign_domain_hourly_limit: int | None = Field(default=None, ge=0, le=10000)
+    campaign_approval_over: int | None = Field(default=None, ge=0, le=100000)
 
 
 @router.get("/settings")

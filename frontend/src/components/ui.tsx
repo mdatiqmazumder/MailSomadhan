@@ -127,7 +127,7 @@ const width = (className?: string) => (className && /(^|\s)(w-|min-w-)/.test(cla
 const inputClass =
   "h-9 rounded-lg border border-border bg-surface px-3 text-sm text-text shadow-card placeholder:text-faint transition-shadow focus:border-accent focus:outline-none focus:ring-3 focus:ring-[var(--ring)] disabled:bg-sunken disabled:opacity-70";
 
-export function Input({ className, ...rest }: React.InputHTMLAttributes<HTMLInputElement>) {
+export function Input({ className, ...rest }: React.InputHTMLAttributes<HTMLInputElement> & { ref?: React.Ref<HTMLInputElement> }) {
   return <input {...rest} className={cx(inputClass, width(className), className)} />;
 }
 

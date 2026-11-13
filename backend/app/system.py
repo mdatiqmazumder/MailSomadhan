@@ -22,10 +22,16 @@ DEFAULT_SETTINGS = {
     "max_attachment_mb": "25",
     "default_quota_mb": "1024",
     "acme_email": "",
+    # Individual sending (campaigns)
+    "campaign_daily_limit": "150",         # messages per user in any 24 hours
+    "campaign_max_recipients": "1000",     # recipients per campaign
+    "campaign_domain_hourly_limit": "20",  # messages per recipient domain per hour, per sender
+    "campaign_approval_over": "0",         # campaigns larger than this need admin approval (0 = never)
 }
 
 SERVICES = ["postfix", "dovecot", "rspamd", "redis-server", "postgresql", "nginx", "fail2ban",
-            "mailsomadhan-api", "mailsomadhan-web", "mailsomadhan-collector"]
+            "mailsomadhan-api", "mailsomadhan-web", "mailsomadhan-collector",
+            "mailsomadhan-campaigns"]
 
 
 # ---------- settings ----------

@@ -113,7 +113,7 @@ Restore onto a fresh Ubuntu server with MailSomadhan installed using the **same 
 3. Stop the services, restore files and the database:
 
    ```bash
-   systemctl stop mailsomadhan-api mailsomadhan-web mailsomadhan-collector postfix dovecot
+   systemctl stop mailsomadhan-api mailsomadhan-web mailsomadhan-collector mailsomadhan-campaigns postfix dovecot
    cp -a etc/mailsomadhan/. /etc/mailsomadhan/
    cp -a var/lib/rspamd/dkim/. /var/lib/rspamd/dkim/
    cp -a var/lib/mailsomadhan/. /var/lib/mailsomadhan/

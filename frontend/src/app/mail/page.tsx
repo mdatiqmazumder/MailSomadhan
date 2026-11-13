@@ -333,6 +333,10 @@ export default function MailPage() {
           <button onClick={newFolder} className="mt-1 flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-muted hover:bg-hover hover:text-text">
             <FolderPlus className="h-4 w-4" /> New folder
           </button>
+          <div className="my-2 border-t border-border" />
+          <Link href="/mail/campaigns" className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm hover:bg-hover">
+            <Send className="h-4 w-4" /> Campaigns
+          </Link>
         </nav>
         <div className="border-t border-border p-3">
           {quotaPct !== null && quota && (

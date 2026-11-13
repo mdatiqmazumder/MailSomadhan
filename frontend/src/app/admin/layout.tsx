@@ -2,7 +2,7 @@
 
 import {
   Activity, AtSign, BarChart3, ChevronsLeft, DatabaseBackup, Download, FileText, Filter, Forward, Gauge, Globe, ListOrdered,
-  LogOut, Mail, Menu as MenuIcon, ScrollText, Send, Server, Settings, ShieldAlert, X,
+  LogOut, Mail, Megaphone, Menu as MenuIcon, ScrollText, Send, Server, Settings, ShieldAlert, X,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -19,6 +19,7 @@ const NAV = [
       { href: "/admin/analytics", label: "User analytics", icon: BarChart3 },
       { href: "/admin/messages", label: "Message log", icon: ScrollText },
       { href: "/admin/reports", label: "Reports", icon: FileText },
+      { href: "/admin/campaigns", label: "Campaigns", icon: Megaphone },
       { href: "/admin/queue", label: "Mail queue", icon: ListOrdered },
     ],
   },

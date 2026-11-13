@@ -5,7 +5,7 @@ set -euo pipefail
 APP_DIR=/opt/mailsomadhan
 SRC_DIR=$APP_DIR/src
 ENV_FILE=/etc/mailsomadhan/mailsomadhan.env
-SERVICES=(postfix dovecot rspamd redis-server postgresql nginx fail2ban mailsomadhan-api mailsomadhan-web mailsomadhan-collector)
+SERVICES=(postfix dovecot rspamd redis-server postgresql nginx fail2ban mailsomadhan-api mailsomadhan-web mailsomadhan-collector mailsomadhan-campaigns)
 
 need_root() {
   [ "$(id -u)" -eq 0 ] || { echo "Run this command as root (sudo mailsomadhan $*)" >&2; exit 1; }

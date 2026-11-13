@@ -10,6 +10,7 @@ import {
   AlignCenter, AlignLeft, AlignRight, Bold, Heading1, Heading2, ImageIcon, Italic, Link2, List, ListOrdered,
   Quote, Redo2, RemoveFormatting, Strikethrough, Underline, Undo2,
 } from "lucide-react";
+import { useEffect } from "react";
 import { cx } from "./ui";
 
 type Props = {
@@ -18,9 +19,11 @@ type Props = {
   placeholder?: string;
   minHeight?: number;
   autoFocus?: boolean;
+  /** Receives the editor instance (e.g. to insert merge fields at the cursor). */
+  onEditor?: (editor: Editor) => void;
 };
 
-export default function RichEditor({ initialHtml, onChange, placeholder, minHeight = 180, autoFocus }: Props) {
+export default function RichEditor({ initialHtml, onChange, placeholder, minHeight = 180, autoFocus, onEditor }: Props) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -39,6 +42,10 @@ export default function RichEditor({ initialHtml, onChange, placeholder, minHeig
     autofocus: autoFocus ? "start" : false,
     onUpdate: ({ editor: e }) => onChange(e.isEmpty ? "" : e.getHTML()),
   });
+
+  useEffect(() => {
+    if (editor && onEditor) onEditor(editor);
+  }, [editor, onEditor]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

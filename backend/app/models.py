@@ -157,3 +157,56 @@ class FilterRule(Base):
     value: Mapped[str] = mapped_column(String(320))
     note: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Campaign(Base):
+    """A message sent individually to many recipients, paced by the campaign worker."""
+
+    __tablename__ = "campaigns"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    mailbox_id: Mapped[int] = mapped_column(ForeignKey("mailboxes.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    subject: Mapped[str] = mapped_column(String(900))
+    html: Mapped[str] = mapped_column(Text)
+    attachments: Mapped[str] = mapped_column(Text, default="[]")  # JSON list of {name, type, size, path}
+    mode: Mapped[str] = mapped_column(String(16), default="fixed")  # instant|fixed|random
+    interval_seconds: Mapped[int] = mapped_column(Integer, default=60)
+    random_min_seconds: Mapped[int] = mapped_column(Integer, default=60)
+    random_max_seconds: Mapped[int] = mapped_column(Integer, default=300)
+    unsubscribe: Mapped[bool] = mapped_column(Boolean, default=True)
+    # draft|pending_approval|scheduled|running|paused|completed|cancelled
+    status: Mapped[str] = mapped_column(String(20), default="scheduled", index=True)
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    next_send_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    waiting_reason: Mapped[str] = mapped_column(String(200), default="")
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    mailbox: Mapped[Mailbox] = relationship()
+
+
+class CampaignRecipient(Base):
+    __tablename__ = "campaign_recipients"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    campaign_id: Mapped[int] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    fields: Mapped[str] = mapped_column(Text, default="{}")  # JSON merge fields
+    # pending|sent|delivered|bounced|failed|skipped|unsubscribed
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    message_id: Mapped[str] = mapped_column(String(500), default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+
+
+class Suppression(Base):
+    """Addresses that must not receive campaign mail from a domain (unsubscribed or bounced)."""
+
+    __tablename__ = "suppressions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    domain_id: Mapped[int] = mapped_column(ForeignKey("domains.id", ondelete="CASCADE"), index=True)
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    reason: Mapped[str] = mapped_column(String(32), default="manual")  # unsubscribed|bounced|manual
+    note: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
