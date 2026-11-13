@@ -19,7 +19,7 @@ def cmd_init(args) -> None:
         if not db.query(Admin).first():
             if not args.admin_password:
                 sys.exit("--admin-password is required on first init")
-            db.add(Admin(username="admin", password_hash=hash_password(args.admin_password)))
+            db.add(Admin(username="admin", password_hash=hash_password(args.admin_password), role="super_admin"))
             print("created admin user: admin")
         primary = db.query(Host).filter_by(is_primary=True).first()
         if primary:
@@ -45,7 +45,7 @@ def cmd_reset_admin(args) -> None:
         if admin:
             admin.password_hash = hash_password(args.password)
         else:
-            db.add(Admin(username=args.username, password_hash=hash_password(args.password)))
+            db.add(Admin(username=args.username, password_hash=hash_password(args.password), role="super_admin"))
         db.commit()
     print(f"password updated for admin: {args.username}")
 

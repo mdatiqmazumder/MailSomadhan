@@ -28,3 +28,12 @@ def migrate() -> None:
         for table, column, ddl in COLUMNS:
             if table in tables and column not in {c["name"] for c in insp.get_columns(table)}:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+        # Repair: there must always be an active super administrator. Installs of 1.5.0 created
+        # the first account with the limited role, which locked everyone out of the console.
+        if "admins" in tables:
+            has_super = conn.execute(text("SELECT 1 FROM admins WHERE role = 'super_admin' AND active = :t"), {"t": True}).first()
+            if not has_super:
+                first = conn.execute(text("SELECT id FROM admins ORDER BY id LIMIT 1")).first()
+                if first:
+                    conn.execute(text("UPDATE admins SET role = 'super_admin', active = :t WHERE id = :id"),
+                                 {"t": True, "id": first[0]})

@@ -226,7 +226,23 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <main className="min-w-0 flex-1 px-4 py-6 lg:px-8 lg:py-8">
           <div className="mx-auto max-w-[1280px]">
             {admin && admin.require_2fa && !admin.totp_enabled && !pathname.startsWith("/admin/account") ? null : (
-              <AdminContext.Provider value={admin}>{children}</AdminContext.Provider>
+              <AdminContext.Provider value={admin}>
+                {page && !allowed(page) ? (
+                  first ? (
+                    <div className="flex justify-center py-16"><Spinner /></div>
+                  ) : (
+                    <div className="mx-auto max-w-md py-16 text-center">
+                      <p className="text-base font-semibold">No access yet</p>
+                      <p className="mt-2 text-sm text-muted">
+                        Your account has no permissions in this console. Ask a super administrator to grant you access to a domain.
+                      </p>
+                      <Link href="/admin/account" className="mt-4 inline-block text-sm font-medium text-accent hover:underline">Go to my account</Link>
+                    </div>
+                  )
+                ) : (
+                  children
+                )}
+              </AdminContext.Provider>
             )}
           </div>
         </main>
