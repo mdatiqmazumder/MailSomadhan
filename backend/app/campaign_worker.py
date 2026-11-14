@@ -19,7 +19,7 @@ from sqlalchemy import func, select
 
 from .campaigns import build_message, load_attachments, recipient_fields, render, unsubscribe_url
 from .config import settings
-from .db import Base, SessionLocal, engine
+from .db import Base, SessionLocal, create_tables, engine
 from .models import Campaign, CampaignRecipient, Mailbox, MailMessage, Suppression
 from .system import get_setting
 
@@ -174,7 +174,7 @@ def track_deliveries(db) -> None:
 
 
 def run() -> None:
-    Base.metadata.create_all(engine)
+    create_tables()
     print("campaign worker started", flush=True)
     last_tracking = 0.0
     while True:

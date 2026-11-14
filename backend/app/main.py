@@ -4,16 +4,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from .db import Base, SessionLocal, engine
+from .db import Base, SessionLocal, create_tables, engine
 from .models import AuditLog
 from .security import COOKIE_NAME, read_token
 from .migrate import migrate
-from .routers import admin, admins, profile, analytics, auth, backup, campaigns, cloudflare, filters, mail, system, tls
+from .routers import admin, admins, profile, analytics, auth, backup, campaigns, cloudflare, filters, mail, push, system, tls
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(engine)
+    create_tables()
     migrate()
     yield
 
@@ -23,7 +23,7 @@ app = FastAPI(title="MailSomadhan API", docs_url=None, redoc_url=None, openapi_u
 
 # ---------------------------------------------------------------- audit log
 SECRET_KEYS = {"password", "current_password", "new_password", "passphrase", "token", "client_secret", "client_id",
-               "service_account", "otp", "code", "state", "secret", "signature_html"}
+               "service_account", "web_config", "otp", "code", "state", "secret", "signature_html"}
 LARGE_KEYS = {"html", "recipients", "value", "emails"}
 
 
@@ -115,6 +115,8 @@ app.include_router(campaigns.public_router, prefix="/api")
 app.include_router(admins.router, prefix="/api/admin")
 app.include_router(tls.router, prefix="/api/admin")
 app.include_router(cloudflare.router, prefix="/api/admin")
+app.include_router(push.admin_router, prefix="/api/admin")
+app.include_router(push.user_router, prefix="/api/mail")
 
 
 @app.get("/api/health")

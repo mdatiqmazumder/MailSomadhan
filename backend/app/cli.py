@@ -2,7 +2,7 @@
 import argparse
 import sys
 
-from .db import Base, SessionLocal, engine
+from .db import Base, SessionLocal, create_tables, engine
 from .models import Admin, Host, Setting
 from .security import check_password_rules, hash_password
 from .system import DEFAULT_SETTINGS, write_hosts_file, write_selector_map
@@ -10,7 +10,7 @@ from .system import DEFAULT_SETTINGS, write_hosts_file, write_selector_map
 
 def cmd_init(args) -> None:
     from .migrate import migrate
-    Base.metadata.create_all(engine)
+    create_tables()
     migrate()
     with SessionLocal() as db:
         for key, value in DEFAULT_SETTINGS.items():

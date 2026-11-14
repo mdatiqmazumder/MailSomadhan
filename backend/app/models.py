@@ -262,3 +262,17 @@ class Suppression(Base):
     reason: Mapped[str] = mapped_column(String(32), default="manual")  # unsubscribed|bounced|manual
     note: Mapped[str] = mapped_column(String(300), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class PushToken(Base):
+    """One browser that receives new-mail notifications (a Firebase Cloud Messaging registration token)."""
+
+    __tablename__ = "push_tokens"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    mailbox_id: Mapped[int] = mapped_column(ForeignKey("mailboxes.id", ondelete="CASCADE"), index=True)
+    token: Mapped[str] = mapped_column(String(500), unique=True)
+    # Mailbox.token_version when registered: "sign out everywhere" or a password reset stops notifications.
+    token_version: Mapped[int] = mapped_column(Integer, default=0)
+    user_agent: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

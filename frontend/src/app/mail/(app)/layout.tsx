@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, formatBytes, formatDate, logout, useMe } from "@/lib/api";
 import Composer from "@/components/mail/Composer";
 import Dashboard from "@/components/mail/Dashboard";
+import PushToggle from "@/components/mail/PushToggle";
 import MessageBody from "@/components/mail/MessageBody";
 import { addrFull, addrLabel, escapeHtml, textToHtml, type Draft, type Folder, type ListItem, type Message } from "@/components/mail/types";
 import { Avatar, Button, IconButton, Spinner, cx, toast, confirmDialog } from "@/components/ui";
@@ -406,6 +407,7 @@ export default function MailLayout({ children }: { children: React.ReactNode }) 
           )}
         </nav>
         <div className="border-t border-border p-3">
+          <PushToggle />
           {quotaPct !== null && quota && (
             <div className="mb-3">
               <div className="h-1.5 overflow-hidden rounded-full bg-hover" role="img" aria-label={`${quotaPct}% of storage used`}>

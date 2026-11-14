@@ -686,7 +686,7 @@ class SettingsIn(BaseModel):
 
 
 # Settings rows that hold secrets or one-time sign-in state are never sent to the browser.
-PRIVATE_SETTINGS = {"google_client_secret", "google_oauth_state"}
+PRIVATE_SETTINGS = {"google_client_secret", "google_oauth_state", "push_credentials"}
 
 
 def public_settings(db: Session) -> dict:

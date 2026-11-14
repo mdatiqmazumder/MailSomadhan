@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  Activity, AtSign, BarChart3, ChevronsLeft, Cpu, DatabaseBackup, Download, FileText, Filter, Forward, Gauge, Globe, ListOrdered,
+  Activity, AtSign, BarChart3, BellRing, ChevronsLeft, Cpu, DatabaseBackup, Download, FileText, Filter, Forward, Gauge, Globe, ListOrdered,
   History, LogOut, Mail, Megaphone, Menu as MenuIcon, ScrollText, Send, Server, Settings, ShieldAlert, UserCog, X,
 } from "lucide-react";
 import Link from "next/link";
@@ -50,6 +50,7 @@ const NAV: { group: string; items: Item[] }[] = [
       { href: "/admin/hosts", label: "Hosts & TLS", icon: Server },
       { href: "/admin/relays", label: "SMTP relays", icon: Send },
       { href: "/admin/backups", label: "Backups", icon: DatabaseBackup },
+      { href: "/admin/notifications", label: "Push notifications", icon: BellRing },
       { href: "/admin/services", label: "Services & jobs", icon: Cpu },
       { href: "/admin/updates", label: "Updates", icon: Download },
       { href: "/admin/settings", label: "Settings", icon: Settings },

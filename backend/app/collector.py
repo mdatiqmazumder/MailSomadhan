@@ -20,8 +20,9 @@ from email.header import decode_header, make_header
 
 from sqlalchemy import delete, select
 
-from .db import Base, SessionLocal, engine
+from .db import Base, SessionLocal, create_tables, engine
 from .models import Domain, MailDelivery, MailMessage, Setting
+from .push import Notifier
 
 RSPAMD_LOG = os.environ.get("MAILSOMADHAN_RSPAMD_LOG", "/var/log/rspamd/rspamd.log")
 OPEN_TTL = timedelta(days=6)  # Postfix keeps deferred mail up to 5 days
@@ -84,6 +85,7 @@ class Collector:
         self.domains_loaded = 0.0
         self.last_purge = 0.0
         self.retention_days = 180
+        self.notifier = None  # push.Notifier when running as the service (not for --parse)
 
     # ------------------------------------------------------------------ helpers
     def locals(self) -> set[str]:
@@ -255,6 +257,7 @@ class Collector:
             delivery.orig_recipient = (m["orig"] or "").lower()
             delivery.is_local = ident in ("postfix/lmtp", "postfix/virtual", "postfix/local") or \
                 delivery.recipient_domain in self.locals()
+            newly_stored = m["status"] == "sent" and delivery.status != "sent" and ident in ("postfix/lmtp", "postfix/virtual")
             delivery.status = m["status"]
             delivery.dsn, delivery.relay = m["dsn"], m["relay"][:255]
             delivery.delay = float(m["delay"])
@@ -262,6 +265,11 @@ class Collector:
             delivery.updated_at = when
             self.recompute_status(msg)
             self.classify(msg)
+            # New mail reached a mailbox: tell its browsers (push notifications). Lines replayed after
+            # a collector restart are old news, so only recent deliveries count.
+            if newly_stored and self.notifier and utcnow() - when < timedelta(minutes=10):
+                self.db.flush()
+                self.notifier.delivered(rcpt, msg.id)
 
     # ------------------------------------------------------------------ rspamd
     def rspamd_line(self, text: str) -> None:
@@ -363,8 +371,10 @@ def follow_rspamd(out: queue.Queue, offset_state: str) -> None:
 
 
 def run() -> None:
-    Base.metadata.create_all(engine)
+    create_tables()
     col = Collector()
+    col.notifier = Notifier(SessionLocal)
+    col.notifier.start()
     events: queue.Queue = queue.Queue(maxsize=20000)
     threading.Thread(target=follow_journal, args=(events, col.state("collector_journal_cursor")), daemon=True).start()
     threading.Thread(target=follow_rspamd, args=(events, col.state("collector_rspamd_offset")), daemon=True).start()
@@ -401,7 +411,7 @@ def run() -> None:
 
 def parse_file(path: str) -> None:
     """Feed a 'journalctl -o json' dump (testing / back-filling)."""
-    Base.metadata.create_all(engine)
+    create_tables()
     col = Collector()
     with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:

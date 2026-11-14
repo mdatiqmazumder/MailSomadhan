@@ -131,6 +131,8 @@ export function useMe(required?: "admin" | "user") {
 
 export async function logout() {
   try {
+    // Stop this mailbox's notifications on this browser first (the session is still valid here).
+    await import("./push").then((m) => m.pushSignOut()).catch(() => {});
     await api("/auth/logout", { method: "POST" });
   } finally {
     window.location.href = "/login";

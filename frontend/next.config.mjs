@@ -16,7 +16,8 @@ const csp = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https: http:",
   "font-src 'self' data:",
-  `connect-src 'self'${dev ? " ws:" : ""}`,
+  // Firebase Cloud Messaging registers the browser for new-mail notifications from these two hosts.
+  `connect-src 'self' https://firebaseinstallations.googleapis.com https://fcmregistrations.googleapis.com${dev ? " ws:" : ""}`,
   "frame-src 'self'",
   "frame-ancestors 'self'",
   "object-src 'none'",
