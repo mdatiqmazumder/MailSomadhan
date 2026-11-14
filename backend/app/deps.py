@@ -30,7 +30,7 @@ PERMISSIONS: dict[str, str] = {
     "aliases.manage": "See and manage aliases",
     "analytics.view": "Dashboard traffic, user analytics, message log and reports",
     "campaigns.manage": "See, pause and approve campaigns of the domain's users",
-    "mailboxes.access": "Open users' mailboxes: read and send mail as them (everything opened or sent is audit-logged)",
+    "mailboxes.access": "Open users' mailboxes: read and send mail as them, and set up forwarding (everything opened or sent is audit-logged)",
     "postmaster.manage": "Read and manage the domain's postmaster@ mailbox (each message opened is audit-logged)",
 }
 

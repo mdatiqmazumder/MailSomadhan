@@ -89,14 +89,21 @@ def read_token(token: str) -> tuple[str, int, int] | None:
 # ---------------------------------------------------------------- sign-in throttling
 # Stored in the database so every API worker sees the same counts; fail2ban adds long bans.
 IP_LIMIT, ACCOUNT_LIMIT, WINDOW_MINUTES = 10, 15, 15
+# Once an account is under attack (ACCOUNT_LIMIT failures from anywhere), each address only gets this many
+# tries for it. The account is never locked for everyone: otherwise anyone could keep a user (or the admin)
+# out by typing wrong passwords from a few addresses.
+UNDER_ATTACK_PER_IP = 3
 
 
 def login_blocked(db, ip: str, identifier: str) -> bool:
     from .models import LoginFailure
     since = datetime.now(timezone.utc) - timedelta(minutes=WINDOW_MINUTES)
     recent = db.query(LoginFailure).filter(LoginFailure.at >= since)
-    return (recent.filter(LoginFailure.ip == ip).count() >= IP_LIMIT
-            or recent.filter(LoginFailure.identifier == identifier).count() >= ACCOUNT_LIMIT)
+    if recent.filter(LoginFailure.ip == ip).count() >= IP_LIMIT:
+        return True
+    if recent.filter(LoginFailure.identifier == identifier).count() < ACCOUNT_LIMIT:
+        return False
+    return recent.filter(LoginFailure.identifier == identifier, LoginFailure.ip == ip).count() >= UNDER_ATTACK_PER_IP
 
 
 def record_login_failure(db, ip: str, identifier: str) -> None:

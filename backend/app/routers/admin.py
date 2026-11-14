@@ -334,6 +334,11 @@ def update_mailbox(mailbox_id: int, body: MailboxPatch, db: Session = Depends(ge
     edits = (body.display_name, body.quota_mb, body.active, body.can_campaign, body.forward_to, body.forward_keep)
     if any(v is not None for v in edits) and not ctx.can("mailboxes.edit"):
         raise HTTPException(403, "You may only reset passwords")
+    # Forwarding copies every incoming message elsewhere: that is reading the user's mail, so it needs the
+    # same right as opening the mailbox. Turning forwarding off only needs mailboxes.edit.
+    sets_forward = (body.forward_to is not None and body.forward_to.strip() != "") or body.forward_keep is not None
+    if sets_forward and not ctx.can("mailboxes.access"):
+        raise HTTPException(403, "Setting up forwarding needs the permission to open users' mailboxes")
     if body.password:
         problem = check_password_rules(body.password)
         if problem:

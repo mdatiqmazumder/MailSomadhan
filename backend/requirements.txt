@@ -12,3 +12,4 @@ nh3>=0.2.17
 pyotp>=2.9
 pillow>=10.3
 weasyprint>=70,<71
+tinycss2>=1.2

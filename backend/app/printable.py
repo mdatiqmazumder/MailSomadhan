@@ -58,6 +58,74 @@ html, body { margin: 0 !important; padding: 0 !important; background: #fff !impo
 """
 
 
+# ---------------------------------------------------------------- keeping the mail's CSS inside the body
+# The message's own styles share the page with our letterhead and the From/To/Date table. Unconfined, a
+# sender could hide those (`#ms-meta{display:none}`) or paint a fake header over them with positioning, so
+# a printed or PDF copy would show made-up details. Every rule is scoped to #ms-body and the properties
+# that can move content outside its box are dropped.
+STYLE_BLOCK = re.compile(r"(<style\b[^>]*>)(.*?)(</style\s*>)", re.I | re.S)
+STYLE_ATTR = re.compile(r'(\sstyle=")([^"]*)(")', re.I)
+BLOCKED_PROPS = {"position", "top", "right", "bottom", "left", "z-index", "transform", "translate", "scale",
+                 "rotate", "zoom", "offset", "offset-path"}
+BLOCKED_PREFIXES = ("inset", "transform-", "offset-")
+NESTED_AT_RULES = {"media", "supports"}
+
+
+def _declarations(text_or_tokens) -> str:
+    import tinycss2
+
+    out = []
+    for d in tinycss2.parse_declaration_list(text_or_tokens, skip_comments=True, skip_whitespace=True):
+        if d.type != "declaration":
+            continue
+        name = d.lower_name
+        if name in BLOCKED_PROPS or name.startswith(BLOCKED_PREFIXES):
+            continue
+        if name.startswith("margin") and any(
+                t.type in ("number", "dimension", "percentage") and t.value < 0 for t in d.value):
+            continue  # negative margins pull content up over the header
+        out.append(f"{name}:{tinycss2.serialize(d.value).strip()}{' !important' if d.important else ''}")
+    return ";".join(out)
+
+
+def _scope_rules(rules) -> str:
+    import tinycss2
+
+    out = []
+    for rule in rules:
+        if rule.type == "qualified-rule":
+            selectors, part = [], []
+            for tok in rule.prelude + [None]:
+                if tok is None or (tok.type == "literal" and tok.value == ","):
+                    sel = tinycss2.serialize(part).strip()
+                    if sel:
+                        selectors.append(f"#ms-body {sel}")
+                    part = []
+                else:
+                    part.append(tok)
+            if selectors:
+                out.append(f"{', '.join(selectors)}{{{_declarations(rule.content)}}}")
+        elif rule.type == "at-rule" and rule.lower_at_keyword in NESTED_AT_RULES and rule.content is not None:
+            inner = tinycss2.parse_rule_list(rule.content, skip_comments=True, skip_whitespace=True)
+            out.append(f"@{rule.lower_at_keyword} {tinycss2.serialize(rule.prelude).strip()}{{{_scope_rules(inner)}}}")
+        # every other at-rule (@page, @import, @font-face ...) is dropped
+    return "\n".join(out)
+
+
+def confine_css(body_html: str) -> str:
+    import tinycss2
+
+    def block(m: re.Match) -> str:
+        rules = tinycss2.parse_stylesheet(m.group(2), skip_comments=True, skip_whitespace=True)
+        css = _scope_rules(rules).replace("</", "<\\/")  # never close the <style> element early
+        return m.group(1) + css + m.group(3)
+
+    def attr(m: re.Match) -> str:
+        return f"{m.group(1)}{_e(_declarations(html_lib.unescape(m.group(2))))}{m.group(3)}"
+
+    return STYLE_ATTR.sub(attr, STYLE_BLOCK.sub(block, body_html))
+
+
 def _e(value: str) -> str:
     return html_lib.escape(value or "", quote=True)
 
@@ -106,7 +174,7 @@ def render(msg: dict, *, brand: str, printed_by: str, accent: str = "#2a62d6", s
         body_html = msg["html"]
         cleaned = REMOTE_CSS_URL.sub("none", REMOTE_IMG.sub("", body_html))
         removed = cleaned != body_html
-        body = f'<div id="ms-body">{cleaned}</div>'
+        body = f'<div id="ms-body">{confine_css(cleaned)}</div>'
     else:
         body = f'<div id="ms-body"><div id="ms-text">{_e(msg.get("text", ""))}</div></div>'
 

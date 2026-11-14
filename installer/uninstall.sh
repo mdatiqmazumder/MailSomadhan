@@ -113,7 +113,7 @@ systemctl reset-failed 'mailsomadhan-*' 2>/dev/null || true
 
 # --------------------------------------------------------------------------- nginx
 step "Removing the web panel from nginx"
-rm -f /etc/nginx/conf.d/mailsomadhan.conf /etc/nginx/snippets/mailsomadhan-app.conf
+rm -f /etc/nginx/conf.d/mailsomadhan.conf /etc/nginx/conf.d/mailsomadhan-log.conf /etc/nginx/snippets/mailsomadhan-app.conf
 rm -rf /var/www/mailsomadhan-acme
 if command -v nginx >/dev/null; then
   if nginx -t >/dev/null 2>&1; then

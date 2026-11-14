@@ -9,3 +9,9 @@ venv/
 .env.local
 backend/devdata/
 .claude/
+
+# Security audit reports stay local (never published with the code)
+docs/SECURITY-AUDIT*.md
+SECURITY-AUDIT*.md
+*security-audit*
+*SECURITY_AUDIT*

@@ -81,10 +81,18 @@ def delete_avatar(user: Mailbox = Depends(require_user), db: Session = Depends(g
 
 @router.get("/avatar/{mailbox_id}")
 def get_avatar(mailbox_id: int, p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    """Profile pictures are visible to signed-in users and administrators of this server only."""
+    """A mailbox user sees the pictures of their own domain; an administrator those of the domains they manage.
+    Anything else answers "not found", so mailbox ids cannot be probed."""
     m = db.get(Mailbox, mailbox_id)
+    if m and p.kind == "user":
+        allowed = m.domain_id == p.mailbox.domain_id
+    elif m:
+        from ..deps import admin_context
+        allowed = admin_context(db, p.admin).can_domain(m.domain_id)
+    else:
+        allowed = False
     path = avatar_path(mailbox_id)
-    if not m or not m.avatar_version or not path.is_file():
+    if not allowed or not m.avatar_version or not path.is_file():
         raise HTTPException(404, "No profile picture")
     return Response(path.read_bytes(), media_type="image/webp",
                     headers={"Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff"})

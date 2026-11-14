@@ -721,7 +721,7 @@ Group=mailsomadhan
 WorkingDirectory=$SRC_DIR/backend
 Environment=MAILSOMADHAN_ENV_FILE=$ENV_FILE
 Environment=PYTHONUNBUFFERED=1
-ExecStart=$APP_DIR/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port $API_PORT --workers 2
+ExecStart=$APP_DIR/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port $API_PORT --workers 2 --no-access-log
 Restart=always
 RestartSec=3
 PrivateTmp=yes
@@ -832,6 +832,13 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
+# Access log without query strings: download and live-update links of an administrator working in a
+# user's mailbox carry a temporary access token there, and mail search terms should not land in logs.
+cat > /etc/nginx/conf.d/mailsomadhan-log.conf <<'EOF'
+log_format mailsomadhan_noquery '$remote_addr - $remote_user [$time_local] "$request_method $uri $server_protocol" '
+                                '$status $body_bytes_sent "$http_referer" "$http_user_agent"';
+EOF
+
 cat > /etc/nginx/snippets/mailsomadhan-app.conf <<EOF
 # Shared by every MailSomadhan virtual host.
 ssl_protocols TLSv1.2 TLSv1.3;
@@ -840,6 +847,7 @@ ssl_session_cache shared:mailsomadhan:10m;
 ssl_session_timeout 1d;
 server_tokens off;
 client_max_body_size 300m;
+access_log /var/log/nginx/access.log mailsomadhan_noquery;
 
 add_header Strict-Transport-Security "max-age=31536000" always;
 add_header X-Content-Type-Options "nosniff" always;

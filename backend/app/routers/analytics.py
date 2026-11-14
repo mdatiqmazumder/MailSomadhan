@@ -102,11 +102,32 @@ def domain_filter(names: list[str] | None):
         return literal(True)
     if not names:
         return literal(False)
+    # The envelope sender of mail arriving on port 25 is chosen by whoever sends it, so it does not prove the
+    # message belongs to a domain: only an authenticated local sender, a recipient (or the alias it was sent
+    # to) on the domain, or a sender address on locally submitted mail count.
     return or_(
-        MailMessage.sender_domain.in_(names),
+        and_(MailMessage.sender_domain.in_(names), MailMessage.source != "smtp"),
         *[MailMessage.user_email.like(f"%@{n}") for n in names],
-        exists().where(and_(MailDelivery.message_pk == MailMessage.id, MailDelivery.recipient_domain.in_(names))),
+        exists().where(and_(MailDelivery.message_pk == MailMessage.id, or_(
+            MailDelivery.recipient_domain.in_(names),
+            *[MailDelivery.orig_recipient.like(f"%@{n}") for n in names],
+        ))),
     )
+
+
+def owns(msg: MailMessage, names: list[str] | None) -> bool:
+    """Whether the message was sent by one of these domains (then every recipient may be shown)."""
+    if names is None:
+        return True
+    sender = msg.user_email or (msg.sender if msg.source != "smtp" else "")
+    return sender.rpartition("@")[2] in names
+
+
+def visible_deliveries(msg: MailMessage, names: list[str] | None) -> list[MailDelivery]:
+    """A message from elsewhere to several domains: a limited admin only sees the recipients on their own."""
+    if owns(msg, names):
+        return list(msg.deliveries)
+    return [d for d in msg.deliveries if d.recipient_domain in names or d.orig_recipient.rpartition("@")[2] in names]
 
 
 def in_range(r: Range):
@@ -363,12 +384,14 @@ def message_query(r: Range, direction: str | None, status: str | None, q: str, s
     return select(m).where(*cond)
 
 
-def message_row(msg: MailMessage, full: bool = False) -> dict:
+def message_row(msg: MailMessage, full: bool = False, scope: list[str] | None = None) -> dict:
+    deliveries = visible_deliveries(msg, scope)
     row = {
         "id": msg.id, "queue_id": msg.queue_id, "created_at": msg.created_at.isoformat(),
         "direction": msg.direction, "status": msg.status, "source": msg.source, "sender": msg.sender,
         "user": msg.user_email, "subject": msg.subject, "size": msg.size,
-        "recipients": [dl.recipient for dl in msg.deliveries][:20], "recipient_count": len(msg.deliveries) or msg.nrcpt,
+        "recipients": [dl.recipient for dl in deliveries][:20],
+        "recipient_count": len(deliveries) if not owns(msg, scope) else (len(msg.deliveries) or msg.nrcpt),
         "spam_score": msg.spam_score, "spam_action": msg.spam_action, "has_attachment": msg.has_attachment,
         "client_ip": msg.client_ip,
     }
@@ -379,7 +402,7 @@ def message_row(msg: MailMessage, full: bool = False) -> dict:
             "reason": msg.reason, "spam_symbols": [s for s in msg.spam_symbols.split(",") if s],
             "deliveries": [{"recipient": dl.recipient, "orig_recipient": dl.orig_recipient, "status": dl.status,
                             "dsn": dl.dsn, "relay": dl.relay, "delay": dl.delay, "response": dl.response,
-                            "local": dl.is_local, "updated_at": dl.updated_at.isoformat()} for dl in msg.deliveries],
+                            "local": dl.is_local, "updated_at": dl.updated_at.isoformat()} for dl in deliveries],
         })
     return row
 
@@ -393,7 +416,7 @@ def messages(r: Range = Depends(range_dep), direction: str | None = None, status
     total = db.execute(select(func.count()).select_from(query.subquery())).scalar_one()
     rows = db.execute(query.order_by(MailMessage.created_at.desc(), MailMessage.id.desc())
                       .offset((page - 1) * size).limit(size)).scalars().all()
-    return {"total": total, "page": page, "size": size, "items": [message_row(x) for x in rows]}
+    return {"total": total, "page": page, "size": size, "items": [message_row(x, scope=scope) for x in rows]}
 
 
 @router.get("/messages/{message_pk}")
@@ -401,7 +424,7 @@ def message_detail(message_pk: int, scope: list[str] | None = Depends(domain_sco
     msg = db.execute(select(MailMessage).where(MailMessage.id == message_pk, domain_filter(scope))).scalars().first()
     if not msg:
         raise HTTPException(404, "Message not found")
-    return message_row(msg, full=True)
+    return message_row(msg, full=True, scope=scope)
 
 
 # ---------------------------------------------------------------- CSV reports
@@ -461,6 +484,6 @@ def report_csv(kind: str, r: Range = Depends(range_dep), scope: list[str] | None
             ["time", "queue_id", "direction", "status", "source", "user", "sender", "recipients", "subject", "size",
              "spam_score", "spam_action", "attachment", "client_ip", "reason"],
             ([x.created_at.isoformat(), x.queue_id or "", x.direction, x.status, x.source, x.user_email, x.sender,
-              " ".join(dl.recipient for dl in x.deliveries), x.subject, x.size, x.spam_score, x.spam_action,
+              " ".join(dl.recipient for dl in visible_deliveries(x, scope)), x.subject, x.size, x.spam_score, x.spam_action,
               x.has_attachment, x.client_ip, x.reason] for x in rows))
     raise HTTPException(404, "Unknown report")

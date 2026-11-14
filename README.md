@@ -81,10 +81,6 @@ It asks you to type the mail hostname to confirm, then removes the panel, API, s
 
 Files: application in `/opt/mailsomadhan`, configuration and secrets in `/etc/mailsomadhan`, mail in `/var/vmail`, install log in `/var/log/mailsomadhan-install.log`.
 
-## Security
-
-See [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md) for the latest security audit, what was fixed and what is recommended.
-
 ## Updating
 
 Every push to the `main` branch of this repository is a new release. Bump the number in `VERSION` when you publish one.

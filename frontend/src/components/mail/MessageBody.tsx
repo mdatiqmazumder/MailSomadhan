@@ -1,23 +1,18 @@
 "use client";
 
-import { ImageOff } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button } from "../ui";
 
 /**
  * Renders an email body in an isolated iframe. The HTML was already sanitised by the server;
- * the iframe sandbox (no scripts) and a strict CSP are a second line of defence, and remote
- * images stay blocked until the reader asks for them (they are commonly used for tracking).
+ * the iframe sandbox (no scripts) and a strict CSP are a second line of defence. Images from the
+ * internet load right away, like in other mail apps.
  */
 export default function MessageBody({ html, text }: { html: string; text: string }) {
   const ref = useRef<HTMLIFrameElement>(null);
-  const [showRemote, setShowRemote] = useState(false);
   const [height, setHeight] = useState(120);
 
-  const hasRemote = useMemo(() => /<img[^>]+src=["']?https?:/i.test(html) || /url\(\s*["']?https?:/i.test(html), [html]);
-
   const doc = useMemo(() => {
-    const img = showRemote ? "data: https: http:" : "data:";
+    const img = "data: https: http:";
     return `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${img}; style-src 'unsafe-inline'; font-src data:">
 <base target="_blank">
@@ -30,10 +25,6 @@ export default function MessageBody({ html, text }: { html: string; text: string
   blockquote{border-left:3px solid #d5d9e0;margin:0 0 0 4px;padding-left:12px;color:#555}
   a{color:#2f5bea}
 </style></head><body>${html}</body></html>`;
-  }, [html, showRemote]);
-
-  useEffect(() => {
-    setShowRemote(false);
   }, [html]);
 
   useEffect(() => {
@@ -65,14 +56,6 @@ export default function MessageBody({ html, text }: { html: string; text: string
 
   return (
     <div>
-      {hasRemote && !showRemote && (
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-raised px-3 py-2 text-[13px] text-muted">
-          <span className="flex items-center gap-1.5">
-            <ImageOff className="h-4 w-4" /> Remote images are hidden to protect your privacy.
-          </span>
-          <Button size="sm" onClick={() => setShowRemote(true)}>Show images</Button>
-        </div>
-      )}
       <div className="overflow-x-auto rounded-lg bg-white p-3">
         <iframe
           ref={ref}

@@ -221,6 +221,8 @@ function MailboxForm({ domains, mailbox, maxMb, onClose, onSaved }: { domains: D
   const { can } = useAdmin();
   const canEdit = !mailbox || can("mailboxes.edit");
   const canPassword = !mailbox || can("mailboxes.password");
+  // Forwarding to an address needs the right to open mailboxes; mailboxes.edit can only turn it off.
+  const canForward = can("mailboxes.access");
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -302,10 +304,12 @@ function MailboxForm({ domains, mailbox, maxMb, onClose, onSaved }: { domains: D
             label="Forwarding"
             hint={mailbox.forward_to
               ? `Set by the user${mailbox.forward_keep ? ", keeping a copy here" : "; no copy is kept here"}. Clear the field to turn it off.`
-              : "Off. Users can set it themselves under Account settings; you can also enter addresses here."}
+              : canForward
+                ? "Off. Users can set it themselves under Account settings; you can also enter addresses here."
+                : "Off. Users can set it themselves under Account settings."}
           >
             <div className="flex gap-2">
-              <Input value={forwardTo} onChange={(e) => setForwardTo(e.target.value)} placeholder="Not forwarded" />
+              <Input value={forwardTo} onChange={(e) => setForwardTo(e.target.value)} placeholder="Not forwarded" disabled={!canForward} />
               {forwardTo && <Button onClick={() => setForwardTo("")}>Clear</Button>}
             </div>
           </Field>

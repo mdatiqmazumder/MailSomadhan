@@ -78,7 +78,9 @@ async def audit(request: Request, call_next):
                 from .models import Admin, Mailbox
                 adm, box = db.get(Admin, access["admin_id"]), db.get(Mailbox, access["mailbox_id"])
                 actor, kind = (adm.username if adm else f"admin:{access['admin_id']}"), "admin"
-                where = request.url.path + ("?" + str(request.url.query) if request.method == "GET" else "")
+                # The query string of download links carries the access token itself: never store it.
+                query = "&".join(f"{k}={v}" for k, v in request.query_params.multi_items() if k != "access")
+                where = request.url.path + ("?" + query if request.method == "GET" and query else "")
                 details = f"In mailbox {box.email if box else access['mailbox_id']}: {where[:300]}" + (f" {details}" if details else "")
         if not actor:
             token = read_token(request.cookies.get(COOKIE_NAME, ""))

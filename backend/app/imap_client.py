@@ -35,6 +35,14 @@ ALLOWED_ATTRS["th"] |= {"colspan", "rowspan"}
 ALLOWED_ATTRS["font"] |= {"color", "face", "size"}
 
 
+def _attribute_filter(tag: str, attr: str, value: str) -> str | None:
+    # data: URLs are needed for embedded images only. As a link target they open attacker-made pages
+    # (fake sign-in forms) that look like they come from this server.
+    if value.strip().lower().startswith("data:") and not (tag == "img" and attr == "src"):
+        return None
+    return value
+
+
 def sanitize_html(html: str) -> str:
     """Strip scripts, event handlers, forms, iframes... The UI additionally renders the
     result inside a sandboxed iframe with a strict CSP."""
@@ -44,6 +52,7 @@ def sanitize_html(html: str) -> str:
         clean_content_tags={"script", "noscript", "iframe", "object", "embed", "title", "head"} - ALLOWED_TAGS,
         attributes=ALLOWED_ATTRS,
         url_schemes={"http", "https", "mailto", "data", "tel"},
+        attribute_filter=_attribute_filter,
         link_rel="noopener noreferrer nofollow",
     )
 
