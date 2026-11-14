@@ -10,7 +10,7 @@ from ..config import settings
 from ..db import get_db
 from ..deps import PERMISSIONS, Principal, admin_context, client_ip, console_ip_allowed, get_principal
 from ..models import Admin, Domain, Mailbox
-from ..security import (COOKIE_NAME, check_password_rules, clear_login_failures, hash_password, login_blocked,
+from ..security import (COOKIE_NAME, check_password_rules, session_hours, clear_login_failures, hash_password, login_blocked,
                         make_token, record_login_failure, verify_password)
 from ..quota import max_mailbox_mb
 from ..system import get_setting
@@ -44,7 +44,7 @@ class CodeIn(BaseModel):
 
 def set_session(response: Response, kind: str, ident: int, version: int) -> None:
     response.set_cookie(
-        COOKIE_NAME, make_token(kind, ident, version), max_age=settings.token_hours * 3600, httponly=True,
+        COOKIE_NAME, make_token(kind, ident, version), max_age=session_hours(kind) * 3600, httponly=True,
         secure=settings.cookie_secure, samesite="strict", path="/",
     )
 

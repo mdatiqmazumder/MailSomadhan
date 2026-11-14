@@ -46,8 +46,12 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
+def session_hours(kind: str) -> int:
+    return settings.user_token_hours if kind == "user" else settings.token_hours
+
+
 def make_token(kind: str, ident: int, version: int = 0) -> str:
-    exp = datetime.now(timezone.utc) + timedelta(hours=settings.token_hours)
+    exp = datetime.now(timezone.utc) + timedelta(hours=session_hours(kind))
     return jwt.encode({"sub": f"{kind}:{ident}", "v": version, "exp": exp}, settings.secret_key, algorithm="HS256")
 
 

@@ -13,7 +13,8 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./dev.db"
     secret_key: str = "dev-insecure-secret-change-me-0123456789"
     cookie_secure: bool = True
-    token_hours: int = 12
+    token_hours: int = 12  # administrators
+    user_token_hours: int = 24 * 365  # mailbox users stay signed in for a year
 
     primary_hostname: str = "localhost"
     web_port: int = 8443
