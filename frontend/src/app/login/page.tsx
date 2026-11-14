@@ -1,15 +1,12 @@
 "use client";
 
-import { BarChart3, Eye, EyeOff, Lock, Mail, ShieldCheck, Zap } from "lucide-react";
+import { Eye, EyeOff, Lock, Mail, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Button, Field, Input } from "@/components/ui";
 
-const POINTS = [
-  { icon: ShieldCheck, title: "Secure by default", text: "TLS everywhere, DKIM, SPF and DMARC, spam and malware filtering." },
-  { icon: BarChart3, title: "Full visibility", text: "Message tracking, per-user analytics and audit-ready reports." },
-  { icon: Zap, title: "Always current", text: "One-click updates and encrypted backups to Google Drive." },
-];
+const REPO_NAME = "mdatiqmazumder/MailSomadhan";
+const REPO_URL = `https://github.com/${REPO_NAME}`;
 
 export default function LoginPage() {
   const [brand, setBrand] = useState("MailSomadhan");
@@ -50,67 +47,99 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="grid min-h-dvh lg:grid-cols-[1.05fr_1fr]">
-      <section className="relative hidden overflow-hidden bg-[#0f1b33] px-14 py-12 text-white lg:flex lg:flex-col">
-        <div aria-hidden className="pointer-events-none absolute -top-40 -right-32 h-[520px] w-[520px] rounded-full bg-[#2a62d6] opacity-30 blur-3xl" />
-        <div aria-hidden className="pointer-events-none absolute -bottom-48 -left-24 h-[420px] w-[420px] rounded-full bg-[#1baf7a] opacity-15 blur-3xl" />
-        <div className="relative flex items-center gap-2.5">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 ring-1 ring-white/15"><Mail className="h-5 w-5" /></span>
-          <span className="text-lg font-semibold">{brand}</span>
-        </div>
-        <div className="relative my-auto max-w-md">
-          <h1 className="text-[34px] leading-tight font-semibold tracking-tight">Business email you control, end to end.</h1>
-          <p className="mt-3 text-[15px] text-white/70">Mail server, webmail and administration for your organisation, on your own infrastructure.</p>
-          <ul className="mt-10 space-y-6">
-            {POINTS.map(({ icon: Icon, title, text }) => (
-              <li key={title} className="flex gap-4">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/8 ring-1 ring-white/12"><Icon className="h-5 w-5 text-[#9ec5f4]" /></span>
-                <div>
-                  <p className="font-medium">{title}</p>
-                  <p className="mt-0.5 text-sm text-white/60">{text}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-        <p className="relative text-xs text-white/40">© {new Date().getFullYear()} {brand}</p>
-      </section>
-
-      <section className="flex items-center justify-center px-5 py-12">
-        <div className="w-full max-w-[380px]">
-          <div className="mb-8 flex items-center gap-2.5 lg:hidden">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-accent-fg"><Mail className="h-5 w-5" /></span>
-            <span className="text-lg font-semibold">{brand}</span>
+    <main className="flex min-h-dvh flex-col items-center justify-center bg-bg px-4 py-10">
+      <div className="w-full max-w-[380px]">
+        <div className="rounded-2xl border border-border bg-surface p-6 shadow-sm sm:p-7">
+          <div className="mb-6 flex items-center gap-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-accent-fg">
+              <Mail className="h-5 w-5" />
+            </span>
+            <span className="text-lg font-semibold tracking-tight">{brand}</span>
           </div>
-          <h2 className="text-2xl font-semibold tracking-tight">Sign in</h2>
-          <p className="mt-1 text-sm text-muted">Use your email address, or the admin username for the console.</p>
-          <form onSubmit={submit} className="mt-8 space-y-5">
+
+          <h1 className="text-xl font-semibold tracking-tight">Sign in</h1>
+
+          <div className="mt-3 flex items-start gap-2.5 rounded-xl border border-ok/25 bg-ok-soft px-3.5 py-2.5 text-ok">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="text-xs leading-relaxed">
+              <p className="font-semibold">End-to-end encrypted</p>
+              <p className="opacity-85">All messages, credentials, and sessions are end-to-end encrypted.</p>
+            </div>
+          </div>
+
+          <form onSubmit={submit} className="mt-5 space-y-4">
             <Field label="Email or username">
-              <Input autoFocus autoComplete="username" value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="you@company.com" required className="h-10" />
+              <Input
+                autoFocus
+                autoComplete="username"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+                placeholder="you@company.com"
+                required
+                className="h-10"
+              />
             </Field>
             <Field label="Password">
               <div className="relative">
-                <Input type={show ? "text" : "password"} autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required className="h-10 pr-10" />
-                <button type="button" onClick={() => setShow((s) => !s)} aria-label={show ? "Hide password" : "Show password"} className="absolute top-1/2 right-2 -translate-y-1/2 rounded-md p-1 text-muted hover:text-text">
+                <Input
+                  type={show ? "text" : "password"}
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  className="h-10 pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShow((s) => !s)}
+                  aria-label={show ? "Hide password" : "Show password"}
+                  className="absolute top-1/2 right-2 -translate-y-1/2 rounded-md p-1 text-muted hover:text-text"
+                >
                   {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
             </Field>
             {needOtp && (
               <Field label="Verification code" hint="The 6-digit code from your authenticator app.">
-                <Input autoFocus inputMode="numeric" autoComplete="one-time-code" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))} maxLength={6} required className="h-10 font-mono tracking-[0.3em]" placeholder="123456" />
+                <Input
+                  autoFocus
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  value={otp}
+                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
+                  maxLength={6}
+                  required
+                  className="h-10 font-mono tracking-[0.3em]"
+                  placeholder="123456"
+                />
               </Field>
             )}
             {error && (
-              <p role="alert" className="rounded-lg border border-danger/25 bg-danger-soft px-3 py-2 text-sm text-danger">{error}</p>
+              <p role="alert" className="rounded-lg border border-danger/25 bg-danger-soft px-3 py-2 text-sm text-danger">
+                {error}
+              </p>
             )}
-            <Button type="submit" variant="primary" loading={busy} className="h-10 w-full">Sign in</Button>
+            <Button type="submit" variant="primary" loading={busy} className="h-10 w-full">
+              <Lock className="h-4 w-4" /> Sign in
+            </Button>
           </form>
-          <p className="mt-8 flex items-center gap-1.5 text-xs text-muted">
-            <Lock className="h-3.5 w-3.5" /> Encrypted connection. Repeated failed sign-ins are blocked automatically.
-          </p>
         </div>
-      </section>
+
+        <p className="mt-5 flex items-center justify-center gap-1.5 text-center text-xs text-muted">
+          <span>Installed from</span>
+          <a
+            href={REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 font-medium text-text hover:underline"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true" className="h-3.5 w-3.5 fill-current">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+            </svg>
+            {REPO_NAME}
+          </a>
+        </p>
+      </div>
     </main>
   );
 }
