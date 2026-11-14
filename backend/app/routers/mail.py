@@ -7,7 +7,7 @@ from email.message import EmailMessage
 from email.utils import formatdate, getaddresses, make_msgid
 from urllib.parse import quote as urlquote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -361,3 +361,140 @@ async def save_draft(
         except MailError as exc:
             _fail(exc)
     return {"ok": True, "uid": new_uid}
+
+
+# ---------------------------------------------------------------- the user's own dashboard
+@router.get("/stats")
+def my_stats(start: str | None = None, end: str | None = None, tz: str = "UTC",
+             user: Mailbox = Depends(require_user), db: Session = Depends(get_db)):
+    """The same sending/receiving numbers an admin sees for this mailbox, plus recent outgoing mail."""
+    from sqlalchemy import select
+
+    from ..models import MailMessage
+    from .analytics import in_range, mailbox_report, parse_range
+    from .campaigns import limits
+
+    r = parse_range(start, end, tz)
+    report = mailbox_report(db, user, r)
+    m = MailMessage
+    rows = db.execute(select(m).where(in_range(r), m.user_email == user.email)
+                      .order_by(m.created_at.desc(), m.id.desc()).limit(25)).scalars().all()
+    recent = []
+    for msg in rows:
+        problems = [dl for dl in msg.deliveries if dl.status in ("bounced", "deferred")]
+        recent.append({
+            "id": msg.id, "created_at": msg.created_at.isoformat(), "subject": msg.subject, "status": msg.status,
+            "recipients": [dl.recipient for dl in msg.deliveries][:5],
+            "recipient_count": len(msg.deliveries) or msg.nrcpt,
+            "reason": (problems[0].response if problems else "") or (msg.reason if msg.status == "rejected" else ""),
+        })
+    report["recent"] = recent
+    report["campaign"] = limits(db, user.id) if user.can_campaign else None
+    return report
+
+
+# ---------------------------------------------------------------- live inbox updates
+async def _idle_events(user_email: str, request: Request):
+    """Server-sent events: one IMAP connection per open webmail tab sits in IDLE on INBOX, and every
+    change (new mail, flags, deletions) becomes a "mailbox" event so the page reloads its list at once.
+    Plain asyncio, so a waiting tab costs no worker thread."""
+    import asyncio
+
+    def esc(value: str) -> str:
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    reader = writer = None
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(settings.imap_host, settings.imap_port), 10)
+
+        async def line() -> bytes:
+            return await asyncio.wait_for(reader.readline(), 30)
+
+        async def command(tag: str, text: str) -> bool:
+            writer.write(f"{tag} {text}\r\n".encode())
+            await writer.drain()
+            while True:
+                resp = await line()
+                if not resp:
+                    return False
+                if resp.startswith(tag.encode() + b" "):
+                    return resp.split(b" ", 2)[1].upper() == b"OK"
+
+        await line()  # greeting
+        login = f"{user_email}*{settings.imap_master_user}"
+        if not await command("a1", f"LOGIN {esc(login)} {esc(settings.imap_master_password)}"):
+            yield "event: error\ndata: login\n\n"
+            return
+        if not await command("a2", "EXAMINE INBOX"):
+            yield "event: error\ndata: inbox\n\n"
+            return
+        yield "event: ready\ndata: 1\n\n"
+        n = 2
+        while not await request.is_disconnected():
+            n += 1
+            tag = f"a{n}"
+            writer.write(f"{tag} IDLE\r\n".encode())
+            await writer.drain()
+            resp = await line()
+            if not resp.startswith(b"+"):
+                break
+            loop = asyncio.get_running_loop()
+            restart_at = loop.time() + 25 * 60  # servers drop IDLE after ~30 minutes
+            changed = False
+            while loop.time() < restart_at and not await request.is_disconnected():
+                try:
+                    resp = await asyncio.wait_for(reader.readline(), 20)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if not resp:
+                    return
+                if resp.startswith(b"* ") and any(k in resp.upper() for k in (b"EXISTS", b"EXPUNGE", b"FETCH")):
+                    changed = True
+                    # Let a burst of updates (several messages, flags) settle before telling the page.
+                    try:
+                        while True:
+                            more = await asyncio.wait_for(reader.readline(), 0.4)
+                            if not more:
+                                return
+                    except asyncio.TimeoutError:
+                        pass
+                    break
+            writer.write(b"DONE\r\n")
+            await writer.drain()
+            while True:
+                resp = await line()
+                if not resp or resp.startswith(tag.encode() + b" "):
+                    break
+            if changed:
+                yield "event: mailbox\ndata: 1\n\n"
+    except (OSError, asyncio.TimeoutError):
+        yield "event: error\ndata: imap\n\n"
+    finally:
+        if writer is not None:
+            try:
+                writer.write(b"z LOGOUT\r\n")
+                writer.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+@router.get("/events")
+async def events(request: Request):
+    from fastapi.responses import StreamingResponse
+
+    from ..db import SessionLocal
+    from ..deps import get_principal
+
+    # Resolve the session by hand: a Depends(get_db) session would stay checked out for the whole stream.
+    db = SessionLocal()
+    try:
+        principal = get_principal(request, db)
+        if principal.kind != "user":
+            raise HTTPException(403, "Mailbox account required")
+        email = principal.mailbox.email
+    finally:
+        db.close()
+    return StreamingResponse(_idle_events(email, request), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})

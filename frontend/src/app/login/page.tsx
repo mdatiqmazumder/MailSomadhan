@@ -36,7 +36,7 @@ export default function LoginPage() {
     setError("");
     try {
       const res = await api<{ kind: string }>("/auth/login", { json: { identifier, password, otp }, noRedirect: true });
-      window.location.href = res.kind === "admin" ? "/admin" : "/mail";
+      window.location.href = res.kind === "admin" ? "/admin" : "/mail/dashboard";
     } catch (err) {
       const msg = (err as Error).message;
       if (msg === "otp_required") {

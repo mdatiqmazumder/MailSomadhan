@@ -2,7 +2,7 @@
 
 import {
   Archive, ArrowLeft, ChevronLeft, ChevronRight, CornerUpLeft, CornerUpRight, Download, File as FileIcon, FolderIcon,
-  FolderPlus, Inbox, LogOut, Mail, MailOpen, Menu, OctagonAlert, Paperclip, PenLine, RefreshCw, ReplyAll, Search,
+  FolderPlus, Inbox, LayoutDashboard, LogOut, Mail, MailOpen, Menu, OctagonAlert, Paperclip, PenLine, RefreshCw, ReplyAll, Search,
   Send, Settings, Star, Trash2, X,
 } from "lucide-react";
 import Link from "next/link";
@@ -84,17 +84,50 @@ export default function MailPage() {
     if (me) loadList();
   }, [me, loadList]);
 
-  // Check for new mail every minute while the tab is visible.
+  // New mail shows up at once: the server holds an IMAP IDLE on INBOX and pushes an event on every
+  // change. A slower poll stays as a safety net (other folders, a dropped stream).
+  const refreshQuiet = useRef<() => void>(() => {});
+  refreshQuiet.current = () => {
+    loadFolders();
+    loadList(true);
+  };
+  useEffect(() => {
+    if (!me || typeof EventSource === "undefined") return;
+    let source: EventSource | null = null;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let failures = 0;
+    const connect = () => {
+      source = new EventSource("/api/mail/events");
+      source.addEventListener("ready", () => { failures = 0; });
+      source.addEventListener("mailbox", () => refreshQuiet.current());
+      source.onerror = () => {
+        // Back off when the stream keeps failing (server down, signed out) instead of hammering it.
+        source?.close();
+        failures += 1;
+        retry = setTimeout(connect, Math.min(60000, 2000 * 2 ** Math.min(failures, 5)));
+      };
+    };
+    connect();
+    return () => {
+      clearTimeout(retry);
+      source?.close();
+    };
+  }, [me]);
+
   useEffect(() => {
     if (!me) return;
     const timer = setInterval(() => {
-      if (document.visibilityState === "visible") {
-        loadFolders();
-        loadList(true);
-      }
+      if (document.visibilityState === "visible") refreshQuiet.current();
     }, 60000);
-    return () => clearInterval(timer);
-  }, [me, loadFolders, loadList]);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refreshQuiet.current();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [me]);
 
   useEffect(() => {
     if (me) document.title = `${current?.unseen ? `(${current.unseen}) ` : ""}${current ? folderLabel(current) : "Mail"} · ${me.brand_name}`;
@@ -333,13 +366,14 @@ export default function MailPage() {
           <button onClick={newFolder} className="mt-1 flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-muted hover:bg-hover hover:text-text">
             <FolderPlus className="h-4 w-4" /> New folder
           </button>
+          <div className="my-2 border-t border-border" />
+          <Link href="/mail/dashboard" className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm hover:bg-hover">
+            <LayoutDashboard className="h-4 w-4" /> Dashboard
+          </Link>
           {me.can_campaign && (
-            <>
-              <div className="my-2 border-t border-border" />
-              <Link href="/mail/campaigns" className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm hover:bg-hover">
-                <Send className="h-4 w-4" /> Campaigns
-              </Link>
-            </>
+            <Link href="/mail/campaigns" className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm hover:bg-hover">
+              <Send className="h-4 w-4" /> Campaigns
+            </Link>
           )}
         </nav>
         <div className="border-t border-border p-3">

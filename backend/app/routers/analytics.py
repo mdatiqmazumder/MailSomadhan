@@ -279,6 +279,12 @@ def user_detail(email: str, r: Range = Depends(range_dep), scope: list[str] | No
     box = db.query(Mailbox).filter_by(email=email).first()
     if not box or (scope is not None and box.domain.name not in scope):
         raise HTTPException(404, "Mailbox not found")
+    return mailbox_report(db, box, r)
+
+
+def mailbox_report(db: Session, box: Mailbox, r: Range) -> dict:
+    """Sending and receiving statistics of one mailbox (admin analytics page and the user's own dashboard)."""
+    email = box.email
     m, d = MailMessage, MailDelivery
     metrics = with_rates(user_metrics(db, r, [email]).get(email, {}))
 
@@ -289,7 +295,11 @@ def user_detail(email: str, r: Range = Depends(range_dep), scope: list[str] | No
     recv_rows = {bucket_key(k): int(v) for k, v in db.execute(
         select(db_, func.count(d.id)).where(d.updated_at >= r.start, d.updated_at < r.end, d.recipient == email,
                                              d.is_local.is_(True), d.status == "sent").group_by(db_))}
-    series = [{"t": k, "sent": sent_rows.get(k, 0), "received": recv_rows.get(k, 0)} for k in all_buckets(r)]
+    bounce_rows = {bucket_key(k): int(v) for k, v in db.execute(
+        select(b, func.count(m.id)).where(in_range(r), m.user_email == email, m.status.in_(("bounced", "partial")))
+        .group_by(b))}
+    series = [{"t": k, "sent": sent_rows.get(k, 0), "received": recv_rows.get(k, 0), "bounced": bounce_rows.get(k, 0)}
+              for k in all_buckets(r)]
 
     if PG:
         local_ts = func.timezone(r.tz, m.created_at)

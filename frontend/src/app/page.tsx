@@ -7,7 +7,7 @@ import { Spinner } from "@/components/ui";
 export default function Home() {
   useEffect(() => {
     api<Me>("/auth/me", { noRedirect: true })
-      .then((me) => window.location.replace(me.kind === "admin" ? "/admin" : "/mail"))
+      .then((me) => window.location.replace(me.kind === "admin" ? "/admin" : "/mail/dashboard"))
       .catch(() => window.location.replace("/login"));
   }, []);
   return (
