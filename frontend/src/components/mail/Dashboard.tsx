@@ -4,7 +4,6 @@ import { CheckCircle2, Clock, Inbox, PenLine, RefreshCw, Send, TriangleAlert } f
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api, formatBytes, formatDate } from "@/lib/api";
-import UserShell from "@/components/UserShell";
 import { BarList, Heatmap, SERIES, SegmentedBar, StatTile, TimeSeriesChart, compact } from "@/components/charts";
 import RangePicker, { useRange } from "@/components/RangePicker";
 import { Button, Card, Empty, Notice, PageSkeleton, StatusBadge, Table, cx } from "@/components/ui";
@@ -21,11 +20,8 @@ type Stats = {
   campaign: { daily_limit: number; used_24h: number } | null;
 };
 
-export default function MyDashboard() {
-  return <UserShell>{(me) => <DashboardBody name={me.display_name || me.email.split("@")[0]} />}</UserShell>;
-}
-
-function DashboardBody({ name }: { name: string }) {
+/** The mailbox user's own sending statistics, shown inside the webmail next to the folder list. */
+export default function Dashboard({ name }: { name: string }) {
   const { range, setRange, query } = useRange();
   const [data, setData] = useState<Stats | null>(null);
   const [error, setError] = useState("");

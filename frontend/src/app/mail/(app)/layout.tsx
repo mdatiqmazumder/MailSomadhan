@@ -6,9 +6,11 @@ import {
   Send, Settings, Star, Trash2, X,
 } from "lucide-react";
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, formatBytes, formatDate, logout, useMe } from "@/lib/api";
 import Composer from "@/components/mail/Composer";
+import Dashboard from "@/components/mail/Dashboard";
 import MessageBody from "@/components/mail/MessageBody";
 import { addrFull, addrLabel, escapeHtml, textToHtml, type Draft, type Folder, type ListItem, type Message } from "@/components/mail/types";
 import { Avatar, Button, IconButton, Spinner, cx, toast, confirmDialog } from "@/components/ui";
@@ -28,8 +30,12 @@ function folderLabel(f: Folder) {
   return ROLE_LABELS[f.role] || f.name;
 }
 
-export default function MailPage() {
+/** The webmail shell (sidebar, folders, composer) shared by /mail and /mail/dashboard, so switching
+ * between the dashboard and a folder keeps the sidebar and its state instead of reloading the page. */
+export default function MailLayout({ children }: { children: React.ReactNode }) {
   const { me } = useMe("user");
+  const router = useRouter();
+  const onDashboard = usePathname() === "/mail/dashboard";
   const [folders, setFolders] = useState<Folder[]>([]);
   const [quota, setQuota] = useState<Quota>(null);
   const [folder, setFolder] = useState("INBOX");
@@ -130,8 +136,16 @@ export default function MailPage() {
   }, [me]);
 
   useEffect(() => {
-    if (me) document.title = `${current?.unseen ? `(${current.unseen}) ` : ""}${current ? folderLabel(current) : "Mail"} · ${me.brand_name}`;
-  }, [me, current]);
+    if (!me) return;
+    const unseen = folders.find((f) => f.role === "inbox")?.unseen || 0;
+    const title = onDashboard
+      ? `${unseen ? `(${unseen}) ` : ""}Dashboard · ${me.brand_name}`
+      : `${current?.unseen ? `(${current.unseen}) ` : ""}${current ? folderLabel(current) : "Mail"} · ${me.brand_name}`;
+    document.title = title;
+    // Next.js puts the default title back after a client-side route change; set ours again after it.
+    const timer = setTimeout(() => { document.title = title; }, 100);
+    return () => clearTimeout(timer);
+  }, [me, current, folders, onDashboard]);
 
   function openFolder(name: string) {
     setFolder(name);
@@ -141,6 +155,12 @@ export default function MailPage() {
     setSelected(new Set());
     setMessage(null);
     setNavOpen(false);
+    if (onDashboard) router.push("/mail");
+  }
+
+  function openDashboard() {
+    setNavOpen(false);
+    if (!onDashboard) router.push("/mail/dashboard");
   }
 
   function refresh() {
@@ -332,9 +352,19 @@ export default function MailPage() {
           </Button>
         </div>
         <nav className="min-h-0 flex-1 overflow-y-auto px-2 py-1" aria-label="Folders">
+          <button
+            onClick={openDashboard}
+            aria-current={onDashboard ? "page" : undefined}
+            className={cx(
+              "mb-1 flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors",
+              onDashboard ? "bg-accent-soft font-medium text-accent" : "hover:bg-hover",
+            )}
+          >
+            <LayoutDashboard className="h-4 w-4 shrink-0" /> Dashboard
+          </button>
           {folders.map((f) => {
             const Icon = ROLE_ICONS[f.role] || FolderIcon;
-            const active = f.name === folder;
+            const active = !onDashboard && f.name === folder;
             const count = f.role === "drafts" ? f.total : f.unseen;
             return (
               <div key={f.name} className="group relative">
@@ -366,14 +396,13 @@ export default function MailPage() {
           <button onClick={newFolder} className="mt-1 flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-muted hover:bg-hover hover:text-text">
             <FolderPlus className="h-4 w-4" /> New folder
           </button>
-          <div className="my-2 border-t border-border" />
-          <Link href="/mail/dashboard" className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm hover:bg-hover">
-            <LayoutDashboard className="h-4 w-4" /> Dashboard
-          </Link>
           {me.can_campaign && (
-            <Link href="/mail/campaigns" className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm hover:bg-hover">
-              <Send className="h-4 w-4" /> Campaigns
-            </Link>
+            <>
+              <div className="my-2 border-t border-border" />
+              <Link href="/mail/campaigns" className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm hover:bg-hover">
+                <Send className="h-4 w-4" /> Campaigns
+              </Link>
+            </>
           )}
         </nav>
         <div className="border-t border-border p-3">
@@ -405,7 +434,25 @@ export default function MailPage() {
         </div>
       </aside>
 
+      {children}
+      {onDashboard && (
+        <section className="flex min-w-0 flex-1 flex-col bg-bg">
+          <div className="flex items-center gap-2 border-b border-border bg-surface px-3 py-2.5 md:hidden">
+            <IconButton label="Folders" onClick={() => setNavOpen(true)}>
+              <Menu className="h-5 w-5" />
+            </IconButton>
+            <span className="font-medium">Dashboard</span>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 lg:px-8 lg:py-8">
+            <div className="mx-auto max-w-[1200px]">
+              <Dashboard name={me.display_name || me.email.split("@")[0]} />
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* ---------- message list ---------- */}
+      {!onDashboard && <>
       <section className={cx("min-w-0 flex-1 flex-col border-r border-border bg-surface lg:max-w-md lg:flex-none lg:basis-[26rem]", message || loadingMessage ? "hidden lg:flex" : "flex")}>
         <div className="flex items-center gap-2 border-b border-border px-3 py-2.5">
           <IconButton label="Folders" className="md:hidden" onClick={() => setNavOpen(true)}>
@@ -626,6 +673,7 @@ export default function MailPage() {
           </>
         )}
       </section>
+      </>}
 
       {draft && (
         <Composer
