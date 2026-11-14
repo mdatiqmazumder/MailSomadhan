@@ -23,7 +23,7 @@ app = FastAPI(title="MailSomadhan API", docs_url=None, redoc_url=None, openapi_u
 
 # ---------------------------------------------------------------- audit log
 SECRET_KEYS = {"password", "current_password", "new_password", "passphrase", "token", "client_secret", "client_id",
-               "service_account", "otp", "code", "secret", "signature_html"}
+               "service_account", "otp", "code", "state", "secret", "signature_html"}
 LARGE_KEYS = {"html", "recipients", "value", "emails"}
 
 

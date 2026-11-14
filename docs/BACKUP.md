@@ -20,38 +20,47 @@ The file is encrypted with AES-256 using a passphrase only you know, then stream
 
 You need a credential (a "key") that lets the server write to your Google Drive. Choose **one** of the two methods.
 
-### Method A — Any Google account (personal Gmail or Workspace)
+### Method A — Sign in with Google (any Google account, recommended)
 
-This uses rclone's sign-in flow. You run one command **on your own computer** (any computer with a web browser, not the server).
+You create your own OAuth client in Google Cloud Console **once**. After that, connecting (or reconnecting) Drive is one click: **Connect Google Drive** opens Google's sign-in page, you click **Allow**, and Google sends you back to the panel, which finishes the setup by itself. No commands and no tokens to copy.
 
-1. Install rclone on your computer:
-   - Windows: download from <https://rclone.org/downloads/>, unzip, open a terminal in that folder
-   - macOS: `brew install rclone`
-   - Linux: `sudo apt install rclone`
-2. Run:
+**One-time setup in Google Cloud Console** (<https://console.cloud.google.com>):
 
-   ```bash
-   rclone authorize "drive"
+1. Create a project (or pick an existing one).
+2. *APIs & Services → Library*: enable the **Google Drive API**.
+3. *Google Auth Platform → Branding*: fill in the app name (for example "MailSomadhan backups") and your support email.
+4. *Google Auth Platform → Audience*:
+   - Google Workspace: choose **Internal**.
+   - Personal Gmail: choose **External**, then click **Publish app** so the status is **In production**.
+     While the app is in *Testing*, Google expires the connection after 7 days and backups stop.
+     The panel only asks for the `drive.file` permission (it can see only the files it creates), which Google does not require verification for.
+5. *Google Auth Platform → Clients → Create client*, type **Web application**. Under **Authorized redirect URIs** add the address the panel shows on the Backups page. It is your panel's address followed by `/admin/backups/google`, for example:
+
+   ```
+   https://mail.example.com:6568/admin/backups/google
    ```
 
-3. A browser window opens. Sign in with the Google account that should store the backups and click **Allow**.
-4. Back in the terminal, rclone prints a block like this:
+   Open the panel at exactly this address when you connect; Google refuses any other.
+6. Copy the **Client ID** and **Client secret**.
 
-   ```
-   Paste the following into your remote machine --->
-   {"access_token":"ya29.a0...","token_type":"Bearer","refresh_token":"1//0g...","expiry":"2026-11-13T15:04:05Z"}
-   <---End paste
-   ```
+**In the panel:** *Backups → Google Drive → Google account*, paste the client ID and secret, click **Connect Google Drive**, sign in with the account that should store the backups, and click **Allow**. The panel shows **Connected · your@account** and tests the connection.
 
-5. Copy the JSON line (from `{` to `}`) and paste it into **Backups → Google Drive → Sign-in token** in the panel, then click **Connect**.
+The client ID and secret are remembered, so **Reconnect** later is just the button.
 
-Optional, recommended for large organisations: rclone's shared client ID is rate-limited. Create your own OAuth client in Google Cloud Console (APIs & Services → Credentials → Create OAuth client ID → Desktop app, and enable the Google Drive API), then run:
+> Because the panel uses the `drive.file` permission, it only sees backups it uploaded itself. To list them from another machine with rclone, use the same OAuth client; otherwise download them from drive.google.com in a browser.
+
+<details>
+<summary>Alternative: paste a token from <code>rclone authorize</code></summary>
+
+If the panel cannot be opened under a fixed address (so no redirect address can be registered), click **Paste an rclone token instead**, then on your own computer (not the server) install rclone (<https://rclone.org/downloads/>) and run:
 
 ```bash
-rclone authorize "drive" "YOUR_CLIENT_ID" "YOUR_CLIENT_SECRET"
+rclone authorize "drive"
 ```
 
-and enter the same client ID and secret in the panel together with the token.
+Sign in, click **Allow**, and paste the JSON line it prints (from `{` to `}`) into the panel. With your own OAuth client of type *Desktop app* use `rclone authorize "drive" "CLIENT_ID" "CLIENT_SECRET"` and enter the same ID and secret in the panel.
+
+</details>
 
 ### Method B — Service account + Shared drive (Google Workspace)
 

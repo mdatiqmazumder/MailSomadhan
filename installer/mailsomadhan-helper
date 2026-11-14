@@ -827,7 +827,8 @@ PY
     ;;
 
   backup-credentials)
-    # JSON on stdin: {"mode": "oauth", "token": "...", "client_id": "", "client_secret": "", "shared_drive_id": ""}
+    # JSON on stdin: {"mode": "oauth", "token": "...", "client_id": "", "client_secret": "", "shared_drive_id": "",
+    #                 "scope": "drive" | "drive.file"}
     #            or {"mode": "service_account", "service_account": "...", "shared_drive_id": "..."}
     load_backup
     umask 077
@@ -839,7 +840,10 @@ mode = d.get("mode")
 sd = (d.get("shared_drive_id") or "").strip()
 if sd and not re.fullmatch(r"[A-Za-z0-9_-]{5,100}", sd):
     sys.exit("invalid shared drive id")
-lines = ["[gdrive]", "type = drive", "scope = drive"]
+scope = d.get("scope") or "drive"
+if scope not in ("drive", "drive.file"):
+    sys.exit("invalid scope")
+lines = ["[gdrive]", "type = drive", "scope = " + scope]
 if mode == "oauth":
     tok = json.loads(d.get("token") or "")
     if not isinstance(tok, dict) or "refresh_token" not in tok:

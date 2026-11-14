@@ -1,13 +1,14 @@
 "use client";
 
-import { CheckCircle2, CircleAlert, CloudUpload, ExternalLink, KeyRound, Loader2, Play, Plug, RefreshCw, Unplug } from "lucide-react";
+import { CheckCircle2, CircleAlert, CloudUpload, ExternalLink, KeyRound, LogIn, Loader2, Play, Plug, RefreshCw, Unplug } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, formatBytes, formatDate, useLoad } from "@/lib/api";
-import { Badge, Button, Card, Empty, Field, Input, Notice, PageHeader, PageSkeleton, Segmented, Select, Table, Textarea, Toggle, confirmDialog, cx, toast } from "@/components/ui";
+import { Badge, Button, Card, CopyText, Empty, Field, Input, Notice, PageHeader, PageSkeleton, Segmented, Select, Table, Textarea, Toggle, confirmDialog, cx, toast } from "@/components/ui";
 
 type Settings = { enabled: boolean; interval_hours: number; hour: number; keep: number; include_mail: boolean; folder: string; mode: string; connected: boolean; passphrase_set: boolean };
 type Status = { status: "running" | "success" | "failed"; message: string; time: string; last_success?: string; last_file?: string; last_size?: number; last_duration?: number } | null;
-type Info = { settings: Settings; status: Status; running: boolean; next_run: string | null; intervals: number[] };
+type Google = { client_id: string; secret_set: boolean; account: string };
+type Info = { settings: Settings; google: Google; status: Status; running: boolean; next_run: string | null; intervals: number[] };
 type File = { name: string; size: number; time: string };
 
 const DOCS = "https://github.com/mdatiqmazumder/MailSomadhan/blob/main/docs/BACKUP.md";
@@ -124,7 +125,7 @@ export default function Backups() {
       )}
 
       <div className="mt-5 grid gap-5 xl:grid-cols-2">
-        <DriveCard settings={s} onChange={info.reload} />
+        <DriveCard settings={s} google={info.data.google} onChange={info.reload} />
         <div className="space-y-5">
           <ScheduleCard settings={s} intervals={info.data.intervals} ready={ready} onSaved={info.reload} />
           <PassphraseCard isSet={s.passphrase_set} onSaved={info.reload} />
@@ -178,7 +179,7 @@ function StatusTile({ label, value, hint, tone }: { label: string; value: string
   );
 }
 
-function DriveCard({ settings, onChange }: { settings: Settings; onChange: () => void }) {
+function DriveCard({ settings, google, onChange }: { settings: Settings; google: Google; onChange: () => void }) {
   const [mode, setMode] = useState<"oauth" | "service_account">((settings.mode as "oauth") || "oauth");
   const [token, setToken] = useState("");
   const [clientId, setClientId] = useState("");
@@ -187,7 +188,27 @@ function DriveCard({ settings, onChange }: { settings: Settings; onChange: () =>
   const [sharedDrive, setSharedDrive] = useState("");
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(!settings.connected);
+  const [editClient, setEditClient] = useState(!google.client_id || !google.secret_set);
+  const [manual, setManual] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [origin, setOrigin] = useState("");
+  useEffect(() => setOrigin(window.location.origin), []);
+  const redirectUri = `${origin}/admin/backups/google`;
+
+  // Sign in with Google: the panel builds the consent link and Google sends the admin back to
+  // /admin/backups/google, which finishes the connection. No token to copy by hand.
+  async function signIn() {
+    setBusy(true);
+    try {
+      const res = await api<{ url: string }>("/admin/backup/google/start", {
+        json: { redirect_uri: redirectUri, client_id: editClient ? clientId.trim() : "", client_secret: editClient ? clientSecret.trim() : "" },
+      });
+      window.location.href = res.url;
+    } catch (err) {
+      toast.error((err as Error).message);
+      setBusy(false);
+    }
+  }
 
   async function connect(e: React.FormEvent) {
     e.preventDefault();
@@ -231,19 +252,53 @@ function DriveCard({ settings, onChange }: { settings: Settings; onChange: () =>
     <Card
       title="Google Drive"
       description="Where backups are stored"
-      actions={settings.connected ? <Badge tone="ok" dot>Connected · {settings.mode === "service_account" ? "service account" : "Google account"}</Badge> : <Badge>Not connected</Badge>}
+      actions={settings.connected ? <Badge tone="ok" dot>Connected · {settings.mode === "service_account" ? "service account" : google.account || "Google account"}</Badge> : <Badge>Not connected</Badge>}
     >
       <div className="p-5">
         {settings.connected && !editing ? (
           <div className="flex flex-wrap gap-2">
             <Button onClick={test} loading={busy}><Plug className="h-4 w-4" /> Test connection</Button>
-            <Button onClick={() => setEditing(true)}>Replace key</Button>
+            <Button onClick={() => setEditing(true)}>{settings.mode === "oauth" ? "Reconnect" : "Replace key"}</Button>
             <Button variant="danger" onClick={disconnect}><Unplug className="h-4 w-4" /> Disconnect</Button>
           </div>
         ) : (
           <form onSubmit={connect} className="space-y-4">
             <Segmented label="Connection method" value={mode} onChange={setMode} options={[{ value: "oauth", label: "Google account" }, { value: "service_account", label: "Service account" }]} />
-            {mode === "oauth" ? (
+            {mode === "oauth" && !manual ? (
+              <div className="space-y-4">
+                {editClient ? (
+                  <>
+                    <ol className="list-decimal space-y-1.5 pl-5 text-sm text-text-2">
+                      <li>In <a className="text-accent underline" href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noopener noreferrer">Google Cloud Console</a> enable the <b>Google Drive API</b>.</li>
+                      <li>Under <i>Google Auth Platform → Clients</i> create a client of type <b>Web application</b>.</li>
+                      <li>Add this address under <b>Authorized redirect URIs</b>:</li>
+                    </ol>
+                    <div className="flex items-center gap-1 rounded-lg border border-border bg-sunken py-1 pr-1 pl-3">
+                      <code className="min-w-0 flex-1 truncate font-mono text-[12.5px]" title={redirectUri}>{redirectUri}</code>
+                      <CopyText value={redirectUri} label="Copy redirect address" />
+                    </div>
+                    <p className="text-xs text-muted">Under <i>Audience</i>, publish the app (<b>In production</b>), or choose <b>Internal</b> on Google Workspace. While it is in <i>Testing</i>, Google ends the connection after 7 days.</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Field label="Client ID"><Input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder={google.client_id || "123…apps.googleusercontent.com"} autoComplete="off" /></Field>
+                      <Field label="Client secret"><Input type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder={google.secret_set ? "Saved (leave empty to keep)" : "GOCSPX-…"} autoComplete="new-password" /></Field>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-sm text-muted">
+                    Sign in with the Google account that should store the backups and allow access. You come back here automatically.{" "}
+                    <span className="text-xs">OAuth client <code className="text-[12px]">{google.client_id.split("-")[0]}…</code> · <button type="button" className="text-accent hover:underline" onClick={() => setEditClient(true)}>change</button></span>
+                  </p>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="button" variant="primary" loading={busy} onClick={signIn} disabled={editClient && (!(clientId.trim() || google.client_id) || !(clientSecret.trim() || google.secret_set))}>
+                    <LogIn className="h-4 w-4" /> Connect Google Drive
+                  </Button>
+                  {settings.connected && <Button type="button" onClick={() => setEditing(false)}>Cancel</Button>}
+                  <span className="flex-1" />
+                  <button type="button" className="text-xs text-muted hover:text-text hover:underline" onClick={() => setManual(true)}>Paste an rclone token instead</button>
+                </div>
+              </div>
+            ) : mode === "oauth" ? (
               <>
                 <p className="text-sm text-muted">
                   On your own computer run <code className="rounded bg-sunken px-1.5 py-0.5 text-[12px]">rclone authorize &quot;drive&quot;</code>, sign in with Google, and paste the JSON it prints.
@@ -281,10 +336,13 @@ function DriveCard({ settings, onChange }: { settings: Settings; onChange: () =>
                 </Field>
               </>
             )}
-            <div className="flex gap-2">
-              <Button type="submit" variant="primary" loading={busy}><Plug className="h-4 w-4" /> Connect</Button>
-              {settings.connected && <Button onClick={() => setEditing(false)}>Cancel</Button>}
-            </div>
+            {(mode !== "oauth" || manual) && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="submit" variant="primary" loading={busy}><Plug className="h-4 w-4" /> Connect</Button>
+                {settings.connected && <Button onClick={() => setEditing(false)}>Cancel</Button>}
+                {manual && <><span className="flex-1" /><button type="button" className="text-xs text-muted hover:text-text hover:underline" onClick={() => setManual(false)}>Use Google sign-in instead</button></>}
+              </div>
+            )}
           </form>
         )}
       </div>

@@ -685,9 +685,17 @@ class SettingsIn(BaseModel):
     campaign_approval_over: int | None = Field(default=None, ge=0, le=100000)
 
 
+# Settings rows that hold secrets or one-time sign-in state are never sent to the browser.
+PRIVATE_SETTINGS = {"google_client_secret", "google_oauth_state"}
+
+
+def public_settings(db: Session) -> dict:
+    return {k: v for k, v in get_settings_map(db).items() if k not in PRIVATE_SETTINGS}
+
+
 @router.get("/settings")
 def read_settings(db: Session = Depends(get_db)):
-    values = get_settings_map(db)
+    values = public_settings(db)
     values["primary_host"] = _primary_host(db)
     return values
 
@@ -728,7 +736,7 @@ def write_settings(body: SettingsIn, request: Request, db: Session = Depends(get
         ok, output = run_helper("set-message-size", str(limit))
         if not ok:
             warning = f"Saved, but the mail server limit could not be updated: {output}"
-    values = get_settings_map(db)
+    values = public_settings(db)
     values["primary_host"] = _primary_host(db)
     values["warning"] = warning
     return values
