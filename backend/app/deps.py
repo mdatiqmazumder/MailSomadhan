@@ -93,7 +93,7 @@ def console_ip_allowed(db: Session, ip: str) -> bool:
 
 ACCESS_HEADER = "x-mailbox-access"
 # EventSource and download links cannot send headers; only these GETs accept the token as ?access=.
-ACCESS_QUERY_PATHS = ("/api/mail/events", "/api/mail/attachment")
+ACCESS_QUERY_PATHS = ("/api/mail/events", "/api/mail/attachment", "/api/mail/print")
 EXPIRED = "Access to this mailbox has ended. Open it again from the admin panel."
 
 

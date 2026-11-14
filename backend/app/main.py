@@ -44,7 +44,7 @@ def redact(data):
     return data
 
 
-ACCESS_READS = ("/api/mail/message", "/api/mail/attachment")
+ACCESS_READS = ("/api/mail/message", "/api/mail/attachment", "/api/mail/print")
 
 
 def audited(request: Request) -> bool:

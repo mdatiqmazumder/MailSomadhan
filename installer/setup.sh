@@ -232,6 +232,11 @@ apt-get install -y -qq --no-install-recommends \
   rspamd redis-server postgresql nginx certbot python3-certbot-dns-cloudflare ufw fail2ban rclone \
   python3 python3-venv python3-pip >/dev/null
 
+# "Download PDF" of emails (WeasyPrint): Pango lays out the text; Noto covers Bengali and most scripts.
+apt-get install -y -qq --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 fonts-noto-core fonts-dejavu-core >/dev/null \
+  || warn "PDF export libraries could not be installed; Print still works, Download PDF will not."
+apt-get install -y -qq --no-install-recommends libharfbuzz-subset0 >/dev/null 2>&1 || true
+
 rm -f /usr/sbin/policy-rc.d
 
 node_major=0

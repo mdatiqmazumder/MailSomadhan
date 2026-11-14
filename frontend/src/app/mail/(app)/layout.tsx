@@ -1,9 +1,9 @@
 "use client";
 
 import {
-  Archive, ArrowLeft, ChevronLeft, ChevronRight, CornerUpLeft, CornerUpRight, Download, File as FileIcon, FolderIcon,
+  Archive, ArrowLeft, ChevronLeft, ChevronRight, CornerUpLeft, CornerUpRight, Download, File as FileIcon, FileDown, FolderIcon,
   FolderPlus, Inbox, LayoutDashboard, LogOut, Mail, MailOpen, Menu, OctagonAlert, Paperclip, PenLine, RefreshCw, ReplyAll, Search,
-  Send, Settings, ShieldAlert, Star, Trash2, X,
+  Printer, Send, Settings, ShieldAlert, Star, Trash2, X,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -26,6 +26,11 @@ const ROLE_LABELS: Record<string, string> = {
 
 type Listing = { total: number; page: number; items: ListItem[] };
 type Quota = { used_kb: number; limit_kb: number } | null;
+
+/** Printable A4 page (opens the print dialog) or a PDF file rendered by the server. */
+function printUrl(msg: Message, format: "html" | "pdf") {
+  return `/api/mail/print?${new URLSearchParams({ folder: msg.folder, uid: String(msg.uid), format })}${accessParam()}`;
+}
 
 function folderLabel(f: Folder) {
   return ROLE_LABELS[f.role] || f.name;
@@ -631,6 +636,10 @@ export default function MailLayout({ children }: { children: React.ReactNode }) 
               <Button size="sm" onClick={() => reply(message, true)} className="hidden sm:inline-flex"><ReplyAll className="h-4 w-4" /> Reply all</Button>
               <Button size="sm" onClick={() => forward(message)}><CornerUpRight className="h-4 w-4" /> Forward</Button>
               <span className="flex-1" />
+              <IconButton label="Print" onClick={() => window.open(printUrl(message, "html"), "_blank", "noopener")}><Printer className="h-4 w-4" /></IconButton>
+              <a href={printUrl(message, "pdf")} download aria-label="Download as PDF" title="Download as PDF" className="hidden h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-hover hover:text-text sm:inline-flex">
+                <FileDown className="h-4 w-4" />
+              </a>
               <IconButton label="Mark as unread" onClick={() => { act("unread", [message.uid]); setMessage(null); }}><Mail className="h-4 w-4" /></IconButton>
               {role !== "archive" && <IconButton label="Archive" onClick={() => act("archive", [message.uid])}><Archive className="h-4 w-4" /></IconButton>}
               {role === "junk" ? (

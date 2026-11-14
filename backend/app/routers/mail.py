@@ -498,3 +498,35 @@ async def events(request: Request):
         db.close()
     return StreamingResponse(_idle_events(email, request), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
+
+
+# ---------------------------------------------------------------- print / PDF
+@router.get("/print")
+def print_message(folder: str, uid: int, format: str = "html", user: Mailbox = Depends(require_user),
+                  db: Session = Depends(get_db)):
+    """A printable A4 version of one message: format=html opens the browser's print dialog,
+    format=pdf downloads a PDF file rendered on the server."""
+    import secrets as _secrets
+
+    from .. import printable
+
+    with _session(user) as s:
+        try:
+            msg = s.get_message(folder, uid)
+        except MailError as exc:
+            _fail(exc)
+    brand = get_setting(db, "brand_name") or "MailSomadhan"
+    if format == "pdf":
+        try:
+            pdf = printable.to_pdf(printable.render(msg, brand=brand, printed_by=user.email))
+        except (ImportError, OSError) as exc:
+            raise HTTPException(501, "PDF export is not installed on this server yet. Run the update, or use Print → Save as PDF.") from exc
+        return Response(content=pdf, media_type="application/pdf", headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{urlquote(printable.filename(msg))}",
+            "X-Content-Type-Options": "nosniff"})
+    nonce = _secrets.token_urlsafe(16)
+    page = printable.render(msg, brand=brand, printed_by=user.email, script_nonce=nonce)
+    return Response(content=page, media_type="text/html; charset=utf-8", headers={
+        # Mail content is sanitized already; this policy also blocks anything remote and every script but ours.
+        "Content-Security-Policy": f"default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'nonce-{nonce}'; frame-ancestors 'none'",
+        "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"})
