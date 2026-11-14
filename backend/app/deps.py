@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from .db import get_db
 from .models import Admin, AdminDomain, Mailbox
-from .security import COOKIE_NAME, read_token
+from .security import COOKIE_NAME, read_access_token, read_token
 from .system import get_setting
 
 # permission -> human description (shown in the console)
@@ -30,6 +30,8 @@ PERMISSIONS: dict[str, str] = {
     "aliases.manage": "See and manage aliases",
     "analytics.view": "Dashboard traffic, user analytics, message log and reports",
     "campaigns.manage": "See, pause and approve campaigns of the domain's users",
+    "mailboxes.access": "Open users' mailboxes: read and send mail as them (everything opened or sent is audit-logged)",
+    "postmaster.manage": "Read and manage the domain's postmaster@ mailbox (each message opened is audit-logged)",
 }
 
 # Endpoints an admin may use while their mandatory 2FA is not set up yet.
@@ -41,6 +43,7 @@ class Principal:
     kind: str  # "admin" | "user"
     admin: Admin | None = None
     mailbox: Mailbox | None = None
+    acting_admin: Admin | None = None  # an administrator who opened this mailbox from the admin panel
 
 
 @dataclass
@@ -88,7 +91,48 @@ def console_ip_allowed(db: Session, ip: str) -> bool:
         return False
 
 
+ACCESS_HEADER = "x-mailbox-access"
+# EventSource and download links cannot send headers; only these GETs accept the token as ?access=.
+ACCESS_QUERY_PATHS = ("/api/mail/events", "/api/mail/attachment")
+EXPIRED = "Access to this mailbox has ended. Open it again from the admin panel."
+
+
+def access_token_of(request: Request) -> str:
+    token = request.headers.get(ACCESS_HEADER, "")
+    if not token and request.method == "GET" and request.url.path in ACCESS_QUERY_PATHS:
+        token = request.query_params.get("access", "")
+    return token
+
+
+def mailbox_access(request: Request, db: Session, raw: str) -> Principal:
+    """An administrator working in a user's mailbox (one browser tab). Webmail endpoints only: never the
+    user's account settings, password or push notifications."""
+    path = request.url.path
+    if not (path.startswith("/api/mail/") or path == "/api/auth/me") or path.startswith("/api/mail/push/"):
+        raise HTTPException(403, "Not available while you are in another user's mailbox")
+    data = read_access_token(raw)
+    if not data:
+        raise HTTPException(401, EXPIRED)
+    session = read_token(request.cookies.get(COOKIE_NAME) or "")
+    admin = db.get(Admin, data["admin_id"])
+    # The token is bound to the administrator's own session in this browser and to both accounts' versions:
+    # signing out, "sign out everywhere" or a password reset ends the access.
+    if (not session or session[:2] != ("admin", data["admin_id"]) or not admin or not admin.active
+            or session[2] != admin.token_version or data["av"] != admin.token_version):
+        raise HTTPException(401, EXPIRED)
+    if not console_ip_allowed(db, client_ip(request)):
+        raise HTTPException(403, "The console cannot be used from this network")
+    mbox = db.get(Mailbox, data["mailbox_id"])
+    ctx = admin_context(db, admin)
+    if not mbox or mbox.token_version != data["mv"] or not ctx.can("mailboxes.access") or not ctx.can_domain(mbox.domain_id):
+        raise HTTPException(401, EXPIRED)
+    return Principal("user", mailbox=mbox, acting_admin=admin)
+
+
 def get_principal(request: Request, db: Session = Depends(get_db)) -> Principal:
+    raw = access_token_of(request)
+    if raw:
+        return mailbox_access(request, db, raw)
     token = request.cookies.get(COOKIE_NAME)
     parsed = read_token(token) if token else None
     if not parsed:

@@ -75,6 +75,7 @@ def _me(p: Principal, db: Session) -> dict:
         "avatar_url": avatar_url(m), "can_campaign": m.can_campaign,
         "signature_html": m.signature_html, "brand_name": brand,
         "max_attachment_mb": int(get_setting(db, "max_attachment_mb") or 25),
+        "acting_admin": p.acting_admin.username if p.acting_admin else None,
     }
 
 

@@ -12,8 +12,49 @@ export class ApiError extends Error {
 
 type Options = { method?: string; json?: unknown; form?: FormData; noRedirect?: boolean };
 
+/* An administrator can open a user's mailbox from the admin panel. The pass arrives in the new tab's
+ * URL fragment (#access=…, never sent to the server or logged) and is kept in this tab only. */
+const ACCESS_KEY = "ms.mailboxAccess";
+if (typeof window !== "undefined") {
+  const m = window.location.hash.match(/[#&]access=([^&]+)/);
+  if (m) {
+    try {
+      sessionStorage.setItem(ACCESS_KEY, decodeURIComponent(m[1]));
+    } catch {
+      /* storage unavailable */
+    }
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
+}
+
+export function mailboxAccess(): string {
+  try {
+    return typeof window === "undefined" ? "" : sessionStorage.getItem(ACCESS_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+/** "&access=…" for the few GET links that cannot carry a header (download links, live events). */
+export function accessParam(prefix = "&"): string {
+  const token = mailboxAccess();
+  return token ? `${prefix}access=${encodeURIComponent(token)}` : "";
+}
+
+/** Leave a mailbox opened from the admin panel (the administrator stays signed in). */
+export function endMailboxAccess() {
+  try {
+    sessionStorage.removeItem(ACCESS_KEY);
+  } catch {
+    /* storage unavailable */
+  }
+  window.location.href = "/admin/mailboxes";
+}
+
 export async function api<T = unknown>(path: string, opts: Options = {}): Promise<T> {
   const headers: Record<string, string> = { "X-Requested-With": "mailsomadhan" };
+  const access = mailboxAccess();
+  if (access && (path.startsWith("/mail/") || path === "/auth/me")) headers["X-Mailbox-Access"] = access;
   let body: BodyInit | undefined;
   if (opts.json !== undefined) {
     headers["Content-Type"] = "application/json";
@@ -32,6 +73,13 @@ export async function api<T = unknown>(path: string, opts: Options = {}): Promis
     });
   } catch {
     throw new ApiError(0, "Cannot reach the server. Check your connection.");
+  }
+  if (res.status === 401 && access && headers["X-Mailbox-Access"]) {
+    // The pass ran out (or the administrator signed out): go back to the admin panel, not the login page.
+    const peek = await res.clone().json().catch(() => ({}));
+    window.alert(peek.detail || "Access to this mailbox has ended.");
+    endMailboxAccess();
+    throw new ApiError(401, "Mailbox access ended");
   }
   if (res.status === 401 && !opts.noRedirect && !window.location.pathname.startsWith("/login")) {
     window.location.href = "/login";
@@ -110,6 +158,8 @@ export type Me =
       signature_html: string;
       brand_name: string;
       max_attachment_mb: number;
+      /** Set when an administrator opened this mailbox from the admin panel. */
+      acting_admin?: string | null;
     };
 
 /** Current session; redirects to /login when signed out or when the role does not match. */
@@ -130,6 +180,7 @@ export function useMe(required?: "admin" | "user") {
 }
 
 export async function logout() {
+  if (mailboxAccess()) return endMailboxAccess();
   try {
     // Stop this mailbox's notifications on this browser first (the session is still valid here).
     await import("./push").then((m) => m.pushSignOut()).catch(() => {});

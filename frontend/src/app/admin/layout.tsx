@@ -2,7 +2,7 @@
 
 import {
   Activity, AtSign, BarChart3, BellRing, ChevronsLeft, Cpu, DatabaseBackup, Download, FileText, Filter, Forward, Gauge, Globe, ListOrdered,
-  History, LogOut, Mail, Megaphone, Menu as MenuIcon, ScrollText, Send, Server, Settings, ShieldAlert, UserCog, X,
+  History, LogOut, Mail, MailCheck, Megaphone, Menu as MenuIcon, ScrollText, Send, Server, Settings, ShieldAlert, UserCog, X,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -33,6 +33,7 @@ const NAV: { group: string; items: Item[] }[] = [
       { href: "/admin/domains", label: "Domains", icon: Globe, perm: "domains.view" },
       { href: "/admin/mailboxes", label: "Mailboxes", icon: AtSign, perm: "mailboxes.view" },
       { href: "/admin/aliases", label: "Aliases", icon: Forward, perm: "aliases.manage" },
+      { href: "/admin/postmaster", label: "Postmaster", icon: MailCheck, perm: "postmaster.manage" },
     ],
   },
   {

@@ -1,6 +1,6 @@
 "use client";
 
-import { Forward, KeyRound, Megaphone, Pencil, Plug, Plus, Send, Trash2 } from "lucide-react";
+import { Forward, KeyRound, MailOpen, Megaphone, Pencil, Plug, Plus, Send, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { api, formatDate, useLoad } from "@/lib/api";
@@ -35,6 +35,26 @@ function randomPassword() {
 export default function MailboxesPage() {
   const domains = useLoad<Domain[]>("/admin/domains");
   const { me, can } = useAdmin();
+
+  // Opens the user's webmail in a new tab with a one-hour pass. The tab is opened right away (inside the
+  // click) so pop-up blockers allow it, then pointed at the mailbox once the pass arrives.
+  async function openMailbox(m: { id: number; email: string }) {
+    if (!(await confirmDialog({
+      title: `Open ${m.email}?`,
+      message: "You can read this user's mail and send mail as them for one hour. Every message you open or send is recorded in the audit log.",
+      confirmLabel: "Open mailbox",
+    }))) return;
+    const tab = window.open("about:blank", "_blank");
+    try {
+      const res = await api<{ token: string }>(`/admin/mailboxes/${m.id}/access`, { method: "POST" });
+      const url = `/mail#access=${encodeURIComponent(res.token)}`;
+      if (tab) tab.location.href = url;
+      else window.location.href = url;
+    } catch (e) {
+      tab?.close();
+      toast.error((e as Error).message);
+    }
+  }
   const maxMb = me?.max_mailbox_mb ?? 10240; // 0 = no server maximum
   const { data, loading, reload } = useLoad<Mailbox[]>("/admin/mailboxes");
   const [filter, setFilter] = useState("");
@@ -129,6 +149,9 @@ export default function MailboxesPage() {
                 </td>
                 <td>
                   <div className="flex justify-end gap-1">
+                    {can("mailboxes.access") && <IconButton label="Open mailbox (read and send as this user)" onClick={() => openMailbox(m)}>
+                      <MailOpen className="h-4 w-4" />
+                    </IconButton>}
                     <IconButton label="Connection settings" onClick={() => setShowing(m)}>
                       <Plug className="h-4 w-4" />
                     </IconButton>

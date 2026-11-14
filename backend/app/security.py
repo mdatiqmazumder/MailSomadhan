@@ -51,6 +51,28 @@ def make_token(kind: str, ident: int, version: int = 0) -> str:
     return jwt.encode({"sub": f"{kind}:{ident}", "v": version, "exp": exp}, settings.secret_key, algorithm="HS256")
 
 
+ACCESS_MINUTES = 60
+
+
+def make_access_token(admin_id: int, admin_version: int, mailbox_id: int, mailbox_version: int) -> str:
+    """Lets an administrator open one mailbox in the webmail for a limited time. Only valid together with
+    that administrator's own signed-in session (checked in deps.mailbox_access)."""
+    exp = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_MINUTES)
+    return jwt.encode({"sub": f"access:{mailbox_id}", "adm": admin_id, "av": admin_version, "mv": mailbox_version,
+                       "exp": exp}, settings.secret_key, algorithm="HS256")
+
+
+def read_access_token(token: str) -> dict | None:
+    try:
+        data = jwt.decode(token, settings.secret_key, algorithms=["HS256"], options={"require": ["exp", "sub"]})
+        kind, ident = data["sub"].split(":", 1)
+        if kind != "access":
+            return None
+        return {"mailbox_id": int(ident), "admin_id": int(data["adm"]), "av": int(data["av"]), "mv": int(data["mv"])}
+    except Exception:
+        return None
+
+
 def read_token(token: str) -> tuple[str, int, int] | None:
     try:
         data = jwt.decode(token, settings.secret_key, algorithms=["HS256"], options={"require": ["exp", "sub"]})

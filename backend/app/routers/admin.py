@@ -111,6 +111,13 @@ def create_domain(body: DomainIn, db: Session = Depends(get_db)):
     db.add(domain)
     db.commit()
     write_selector_map(db)
+    # Every domain needs a working postmaster@ (bounces, DMARC reports, abuse contact).
+    from .postmaster import auto_enabled, ensure_postmaster
+    if auto_enabled(db):
+        try:
+            ensure_postmaster(db, domain)
+        except HTTPException:
+            db.rollback()  # e.g. no storage left; it can be created later from the Postmaster page
     return _domain_out(domain)
 
 
@@ -260,6 +267,18 @@ def create_mailbox(body: MailboxIn, db: Session = Depends(get_db), ctx: AdminCtx
     out = _mailbox_out(mbox)
     out["welcome_sent"] = deliver_welcome(db, mbox) if body.send_welcome else False
     return out
+
+
+@scoped.post("/mailboxes/{mailbox_id}/access")
+def open_mailbox(mailbox_id: int, db: Session = Depends(get_db), ctx: AdminCtx = Depends(require_perm("mailboxes.access"))):
+    """A one-hour pass to open this mailbox in the webmail (in a new tab). Recorded in the audit log, as is
+    every message opened and every mail sent with it."""
+    from ..security import ACCESS_MINUTES, make_access_token
+    mbox = db.get(Mailbox, mailbox_id)
+    if not mbox or not ctx.can_domain(mbox.domain_id):
+        raise HTTPException(404, "Mailbox not found")
+    return {"token": make_access_token(ctx.admin.id, ctx.admin.token_version, mbox.id, mbox.token_version),
+            "email": mbox.email, "expires_in": ACCESS_MINUTES * 60}
 
 
 @scoped.get("/mailboxes/{mailbox_id}/connection")

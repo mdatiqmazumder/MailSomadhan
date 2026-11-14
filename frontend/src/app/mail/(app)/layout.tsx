@@ -3,12 +3,12 @@
 import {
   Archive, ArrowLeft, ChevronLeft, ChevronRight, CornerUpLeft, CornerUpRight, Download, File as FileIcon, FolderIcon,
   FolderPlus, Inbox, LayoutDashboard, LogOut, Mail, MailOpen, Menu, OctagonAlert, Paperclip, PenLine, RefreshCw, ReplyAll, Search,
-  Send, Settings, Star, Trash2, X,
+  Send, Settings, ShieldAlert, Star, Trash2, X,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, formatBytes, formatDate, logout, useMe } from "@/lib/api";
+import { accessParam, api, endMailboxAccess, formatBytes, formatDate, logout, useMe } from "@/lib/api";
 import Composer from "@/components/mail/Composer";
 import Dashboard from "@/components/mail/Dashboard";
 import PushToggle from "@/components/mail/PushToggle";
@@ -104,7 +104,7 @@ export default function MailLayout({ children }: { children: React.ReactNode }) 
     let retry: ReturnType<typeof setTimeout> | undefined;
     let failures = 0;
     const connect = () => {
-      source = new EventSource("/api/mail/events");
+      source = new EventSource(`/api/mail/events${accessParam("?")}`);
       source.addEventListener("ready", () => { failures = 0; });
       source.addEventListener("mailbox", () => refreshQuiet.current());
       source.onerror = () => {
@@ -332,7 +332,17 @@ export default function MailLayout({ children }: { children: React.ReactNode }) 
   const quotaPct = quota && quota.limit_kb ? Math.min(100, Math.round((quota.used_kb / quota.limit_kb) * 100)) : null;
 
   return (
-    <div className="flex h-dvh overflow-hidden">
+    <div className="flex h-dvh flex-col overflow-hidden">
+      {me.acting_admin && (
+        <div role="status" className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 bg-warn px-4 py-2 text-[13px] font-medium text-white">
+          <ShieldAlert className="h-4 w-4 shrink-0" />
+          <span className="min-w-0 flex-1">
+            You are in <b>{me.email}</b>&apos;s mailbox as administrator <b>{me.acting_admin}</b>. Mail you send goes out as {me.email}. Every message you open or send is recorded in the audit log.
+          </span>
+          <button onClick={endMailboxAccess} className="rounded-md bg-white/20 px-2.5 py-1 hover:bg-white/30">Close mailbox</button>
+        </div>
+      )}
+    <div className="flex min-h-0 flex-1 overflow-hidden">
       {/* ---------- folders ---------- */}
       {navOpen && <div className="fixed inset-0 z-20 bg-black/40 md:hidden" onClick={() => setNavOpen(false)} />}
       <aside
@@ -407,7 +417,7 @@ export default function MailLayout({ children }: { children: React.ReactNode }) 
           )}
         </nav>
         <div className="border-t border-border p-3">
-          <PushToggle />
+          {!me.acting_admin && <PushToggle />}
           {quotaPct !== null && quota && (
             <div className="mb-3">
               <div className="h-1.5 overflow-hidden rounded-full bg-hover" role="img" aria-label={`${quotaPct}% of storage used`}>
@@ -426,12 +436,20 @@ export default function MailLayout({ children }: { children: React.ReactNode }) 
             </div>
           </div>
           <div className="mt-2 flex gap-1">
-            <Link href="/account" className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border text-[13px] hover:bg-hover">
-              <Settings className="h-3.5 w-3.5" /> Settings
-            </Link>
-            <button onClick={logout} className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border text-[13px] hover:bg-hover">
-              <LogOut className="h-3.5 w-3.5" /> Sign out
-            </button>
+            {me.acting_admin ? (
+              <button onClick={endMailboxAccess} className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border text-[13px] hover:bg-hover">
+                <LogOut className="h-3.5 w-3.5" /> Close mailbox
+              </button>
+            ) : (
+              <>
+                <Link href="/account" className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border text-[13px] hover:bg-hover">
+                  <Settings className="h-3.5 w-3.5" /> Settings
+                </Link>
+                <button onClick={logout} className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border text-[13px] hover:bg-hover">
+                  <LogOut className="h-3.5 w-3.5" /> Sign out
+                </button>
+              </>
+            )}
           </div>
         </div>
       </aside>
@@ -654,7 +672,7 @@ export default function MailLayout({ children }: { children: React.ReactNode }) 
                     {message.attachments.map((a) => (
                       <a
                         key={a.index}
-                        href={`/api/mail/attachment?${new URLSearchParams({ folder: message.folder, uid: String(message.uid), index: String(a.index) })}`}
+                        href={`/api/mail/attachment?${new URLSearchParams({ folder: message.folder, uid: String(message.uid), index: String(a.index) })}${accessParam()}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         download={a.filename}
@@ -688,6 +706,7 @@ export default function MailLayout({ children }: { children: React.ReactNode }) 
           }}
         />
       )}
+    </div>
     </div>
   );
 }

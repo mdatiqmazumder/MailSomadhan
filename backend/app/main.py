@@ -6,9 +6,10 @@ from fastapi.responses import JSONResponse
 
 from .db import Base, SessionLocal, create_tables, engine
 from .models import AuditLog
-from .security import COOKIE_NAME, read_token
+from .deps import access_token_of
+from .security import COOKIE_NAME, read_access_token, read_token
 from .migrate import migrate
-from .routers import admin, admins, profile, analytics, auth, backup, campaigns, cloudflare, filters, mail, push, system, tls
+from .routers import admin, admins, profile, analytics, auth, backup, campaigns, cloudflare, filters, mail, postmaster, push, system, tls
 
 
 @asynccontextmanager
@@ -43,10 +44,15 @@ def redact(data):
     return data
 
 
+ACCESS_READS = ("/api/mail/message", "/api/mail/attachment")
+
+
 def audited(request: Request) -> bool:
     path = request.url.path
     if path == "/api/auth/login":
         return True
+    if access_token_of(request) and path.startswith("/api/mail/"):
+        return request.method != "GET" or path in ACCESS_READS
     return request.method not in ("GET", "HEAD", "OPTIONS") and path.startswith(("/api/admin/", "/api/account/"))
 
 
@@ -66,6 +72,14 @@ async def audit(request: Request, call_next):
                 actor = str(parsed.get("identifier", ""))[:320].lower()
                 kind = "user" if "@" in actor else "admin"
             details = json.dumps(redact(parsed), ensure_ascii=False)[:4000]
+        access = read_access_token(access_token_of(request)) if access_token_of(request) else None
+        if access and not actor:
+            with SessionLocal() as db:
+                from .models import Admin, Mailbox
+                adm, box = db.get(Admin, access["admin_id"]), db.get(Mailbox, access["mailbox_id"])
+                actor, kind = (adm.username if adm else f"admin:{access['admin_id']}"), "admin"
+                where = request.url.path + ("?" + str(request.url.query) if request.method == "GET" else "")
+                details = f"In mailbox {box.email if box else access['mailbox_id']}: {where[:300]}" + (f" {details}" if details else "")
         if not actor:
             token = read_token(request.cookies.get(COOKIE_NAME, ""))
             if token:
@@ -116,6 +130,7 @@ app.include_router(admins.router, prefix="/api/admin")
 app.include_router(tls.router, prefix="/api/admin")
 app.include_router(cloudflare.router, prefix="/api/admin")
 app.include_router(push.admin_router, prefix="/api/admin")
+app.include_router(postmaster.router, prefix="/api/admin")
 app.include_router(push.user_router, prefix="/api/mail")
 
 
