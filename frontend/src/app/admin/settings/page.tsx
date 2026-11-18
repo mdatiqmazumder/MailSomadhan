@@ -16,6 +16,7 @@ type Settings = {
   require_admin_2fa: string;
   admin_allowed_networks: string;
   primary_host: string;
+  web_port: number;
   warning?: string;
 };
 type Storage = { max_mailbox_mb: number; allocated_mb: number; used_kb: number; over_max: string[]; overcommitted: boolean; disk: { total: number; free: number } };
@@ -35,10 +36,19 @@ export default function SettingsPage() {
   }, [data]);
 
   async function put(json: Record<string, unknown>, which: "general" | "storage") {
+    const prevPort = form?.web_port;
     setBusy(which);
     try {
       const saved = await api<Settings>("/admin/settings", { method: "PUT", json });
       setForm(saved);
+      if (saved.web_port && prevPort && saved.web_port !== prevPort) {
+        toast.ok(`Panel port changed to ${saved.web_port}; redirecting…`);
+        const portPart = saved.web_port === 443 ? "" : `:${saved.web_port}`;
+        setTimeout(() => {
+          window.location.href = `${window.location.protocol}//${window.location.hostname}${portPart}${window.location.pathname}`;
+        }, 600);
+        return;
+      }
       if (saved.warning) toast.error(saved.warning);
       else toast.ok("Settings saved");
       storage.reload();
@@ -60,11 +70,25 @@ export default function SettingsPage() {
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title="General">
           <form
-            onSubmit={(e) => { e.preventDefault(); put({ brand_name: form.brand_name, max_attachment_mb: Number(form.max_attachment_mb), acme_email: form.acme_email }, "general"); }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              put(
+                {
+                  brand_name: form.brand_name,
+                  max_attachment_mb: Number(form.max_attachment_mb),
+                  acme_email: form.acme_email,
+                  web_port: Number(form.web_port),
+                },
+                "general",
+              );
+            }}
             className="space-y-4 p-5"
           >
             <Field label="Product name" hint="Shown on the sign-in page and in the webmail header.">
               <Input value={form.brand_name} onChange={set("brand_name")} required maxLength={60} />
+            </Field>
+            <Field label="Panel port (HTTPS)" hint="Port for the admin panel and webmail (for example 8443 or 443). Changing it reloads nginx and redirects your browser.">
+              <Input type="number" min={1} max={65535} value={form.web_port ?? 8443} onChange={(e) => setForm({ ...form, web_port: Number(e.target.value) })} required />
             </Field>
             <Field label="Maximum attachment size (MB)" hint="Applies to webmail and to mail accepted over SMTP.">
               <Input type="number" min={1} max={200} value={form.max_attachment_mb} onChange={set("max_attachment_mb")} required />

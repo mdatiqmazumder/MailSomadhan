@@ -604,6 +604,40 @@ case "$cmd" in
     echo "primary host set to $host"
     ;;
 
+  set-web-port)
+    port="${1:-}"
+    [[ "$port" =~ ^[0-9]{1,5}$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "invalid port"
+    [ "$port" != "$HTTP_PORT" ] || die "panel port cannot be the same as HTTP port ($HTTP_PORT)"
+    case " 25 465 587 993 10025 10143 11332 11334 5432 6379 18080 13000 " in
+      *" $port "*) die "port $port is reserved for mail or internal services" ;;
+    esac
+    if [ "$port" != "$WEB_PORT" ]; then
+      if ss -ltnH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$port$"; then
+        die "port $port is already in use by another program"
+      fi
+    fi
+    WEB_PORT="$port"
+    for f in "$CONF" /etc/mailsomadhan/install.conf; do
+      if [ -f "$f" ]; then
+        sed -i '/^WEB_PORT=/d' "$f"
+        echo "WEB_PORT='$port'" >> "$f"
+      fi
+    done
+    if [ -f /etc/mailsomadhan/mailsomadhan.env ]; then
+      sed -i '/^MAILSOMADHAN_WEB_PORT=/d' /etc/mailsomadhan/mailsomadhan.env
+      echo "MAILSOMADHAN_WEB_PORT=$port" >> /etc/mailsomadhan/mailsomadhan.env
+    fi
+    if [ -f /etc/fail2ban/jail.d/mailsomadhan.local ]; then
+      sed -i "s/^port = .*/port = $port/" /etc/fail2ban/jail.d/mailsomadhan.local
+      systemctl reload fail2ban 2>/dev/null || true
+    fi
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+      ufw allow "$port/tcp" >/dev/null 2>&1 || true
+    fi
+    sync_tls
+    echo "panel port set to $port"
+    ;;
+
   tls-start)
     # tls-start <http|dns|cloudflare> <host> [email]: issue a certificate in the background.
     method="${1:-}"; host="${2:-}"; email="${3:-}"

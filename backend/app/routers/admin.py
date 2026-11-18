@@ -805,6 +805,7 @@ class SettingsIn(BaseModel):
     max_attachment_mb: int | None = Field(default=None, ge=1, le=200)
     default_quota_mb: int | None = Field(default=None, ge=0, le=1024 * 1024)  # 0 = unlimited
     acme_email: str | None = Field(default=None, max_length=320)
+    web_port: int | None = Field(default=None, ge=1, le=65535)
     max_mailbox_quota_mb: int | None = Field(default=None, ge=0, le=1024 * 1024)  # 0 = unlimited
     default_domain_storage_mb: int | None = Field(default=None, ge=0, le=100 * 1024 * 1024)  # 0 = unlimited
     require_admin_2fa: int | None = Field(default=None, ge=0, le=1)
@@ -825,8 +826,10 @@ def public_settings(db: Session) -> dict:
 
 @router.get("/settings")
 def read_settings(db: Session = Depends(get_db)):
+    from ..config import settings
     values = public_settings(db)
     values["primary_host"] = _primary_host(db)
+    values["web_port"] = settings.web_port
     return values
 
 
@@ -850,6 +853,16 @@ def write_settings(body: SettingsIn, request: Request, db: Session = Depends(get
     default = data["default_quota_mb"] if "default_quota_mb" in data else int(get_setting(db, "default_quota_mb") or 0)
     if not fits(default, cap):
         raise HTTPException(400, f"The default mailbox quota cannot exceed the {gb(cap)} maximum")
+    if "web_port" in data:
+        new_port = int(data.pop("web_port"))
+        if new_port in {25, 465, 587, 993, 10025, 10143, 11332, 11334, 5432, 6379, 18080, 13000}:
+            raise HTTPException(400, f"Port {new_port} is reserved for mail or internal services")
+        from ..config import settings
+        if new_port != settings.web_port:
+            ok, output = run_helper("set-web-port", str(new_port), timeout=60)
+            if not ok:
+                raise HTTPException(400, output or f"Could not switch panel port to {new_port}")
+            settings.web_port = new_port
     for key, value in data.items():
         if key not in DEFAULT_SETTINGS:
             continue
@@ -866,8 +879,10 @@ def write_settings(body: SettingsIn, request: Request, db: Session = Depends(get
         ok, output = run_helper("set-message-size", str(limit))
         if not ok:
             warning = f"Saved, but the mail server limit could not be updated: {output}"
+    from ..config import settings
     values = public_settings(db)
     values["primary_host"] = _primary_host(db)
+    values["web_port"] = settings.web_port
     values["warning"] = warning
     return values
 
