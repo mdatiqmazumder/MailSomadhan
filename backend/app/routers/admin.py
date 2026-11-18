@@ -307,6 +307,49 @@ async def import_mailbox_backup(
             pass
 
 
+class CPanelConnectIn(BaseModel):
+    host: str = Field(min_length=3, max_length=255)
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=300)
+
+
+class CPanelImportIn(CPanelConnectIn):
+    emails: list[str] = Field(min_length=1, max_length=2000)
+    use_cpanel_passwords: bool = True
+    reset_existing_passwords: bool = True
+
+
+@scoped.post("/mailboxes/cpanel/inspect")
+def cpanel_inspect(body: CPanelConnectIn, _ctx: AdminCtx = Depends(require_perm("mailboxes.create"))):
+    """Connect to cPanel from the web panel and list available domains and email accounts."""
+    from ..cpanel_sync import inspect_cpanel
+    return inspect_cpanel(body.host, body.username, body.password)
+
+
+@scoped.post("/mailboxes/cpanel/import")
+def cpanel_import_start(body: CPanelImportIn, ctx: AdminCtx = Depends(require_perm("mailboxes.create"))):
+    """Start a background job to download selected cPanel mailboxes and import them into MailSomadhan."""
+    from ..cpanel_sync import start_cpanel_import_job
+    job_id = start_cpanel_import_job(
+        host=body.host,
+        username=body.username,
+        password=body.password,
+        selected_emails=body.emails,
+        allowed_domain_ids=ctx.domain_ids,
+        is_super=ctx.is_super,
+        use_cpanel_passwords=body.use_cpanel_passwords,
+        reset_existing_passwords=body.reset_existing_passwords,
+    )
+    return {"job_id": job_id}
+
+
+@scoped.get("/mailboxes/cpanel/import/{job_id}")
+def cpanel_import_status(job_id: str, _ctx: AdminCtx = Depends(require_perm("mailboxes.create"))):
+    """Poll progress of a running cPanel import job."""
+    from ..cpanel_sync import get_cpanel_import_job
+    return get_cpanel_import_job(job_id)
+
+
 @scoped.post("/mailboxes/{mailbox_id}/access")
 def open_mailbox(mailbox_id: int, db: Session = Depends(get_db), ctx: AdminCtx = Depends(require_perm("mailboxes.access"))):
     """A one-hour pass to open this mailbox in the webmail (in a new tab). Recorded in the audit log, as is

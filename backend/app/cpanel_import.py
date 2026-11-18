@@ -554,6 +554,241 @@ def _append_account_messages_to_dovecot(
     return inserted, skipped, folder_counts
 
 
+def import_discovered_accounts(
+    db: Session,
+    accounts: list[dict[str, Any]],
+    allowed_domain_ids: set[int] | None = None,
+    is_super: bool = True,
+    use_cpanel_passwords: bool = True,
+    reset_existing_passwords: bool = True,
+) -> dict[str, Any]:
+    """Import a list of discovered account dicts (each with email, local_part, domain,
+    quota_mb, password_hash, messages) into MailSomadhan."""
+    accounts_by_domain: dict[str, list[dict[str, Any]]] = {}
+    for acc in accounts:
+        accounts_by_domain.setdefault(acc["domain"], []).append(acc)
+
+    domains_by_name: dict[str, Domain] = {}
+    domains_created: list[str] = []
+
+    for dom_name, dom_accounts in accounts_by_domain.items():
+        domain = db.query(Domain).filter_by(name=dom_name).first()
+        if not domain:
+            if not is_super:
+                raise HTTPException(
+                    403, f"Domain {dom_name} does not exist yet. Only a super administrator can create new domains."
+                )
+            limit = int(get_setting(db, "default_domain_storage_mb") or 0)
+            default_q = int(get_setting(db, "default_quota_mb") or 0)
+            if default_q == UNLIMITED and (limit != UNLIMITED or max_mailbox_mb(db) != UNLIMITED):
+                default_q = smallest(1024, max_mailbox_mb(db), limit)
+            domain = Domain(
+                name=dom_name,
+                default_quota_mb=smallest(default_q, max_mailbox_mb(db), limit) if default_q else UNLIMITED,
+                storage_limit_mb=limit,
+                active=True,
+            )
+            generate_dkim(domain)
+            db.add(domain)
+            db.commit()
+            db.refresh(domain)
+            write_selector_map(db)
+            if auto_enabled(db):
+                try:
+                    ensure_postmaster(db, domain)
+                except Exception:
+                    db.rollback()
+            domains_created.append(dom_name)
+        else:
+            if allowed_domain_ids is not None and domain.id not in allowed_domain_ids:
+                raise HTTPException(403, f"You do not have permission to import into domain {dom_name}")
+
+        if domain.storage_limit_mb != UNLIMITED:
+            existing_alloc = sum(
+                m.quota_mb for m in db.query(Mailbox).filter_by(domain_id=domain.id).all() if m.quota_mb != UNLIMITED
+            )
+            needed_alloc = sum(int(a.get("quota_mb") or 1024) for a in dom_accounts)
+            if existing_alloc + needed_alloc > domain.storage_limit_mb:
+                domain.storage_limit_mb = existing_alloc + needed_alloc + 10240
+                db.commit()
+
+        domains_by_name[dom_name] = domain
+
+    local_domain_names = {d.name.lower() for d in db.query(Domain).all()}
+    results: list[dict[str, Any]] = []
+    total_imported_msgs = 0
+    total_skipped_msgs = 0
+
+    for acc in accounts:
+        email_addr = acc["email"]
+        local_part = acc["local_part"]
+        dom_name = acc["domain"]
+        domain = domains_by_name[dom_name]
+        messages: list[dict[str, Any]] = acc.get("messages") or []
+        cpanel_hash = str(acc.get("password_hash") or "").strip()
+
+        total_bytes = sum(int(m.get("size") or 0) for m in messages)
+        min_needed_mb = int(total_bytes / (1024 * 1024)) + 512
+        max_mb = max_mailbox_mb(db)
+        desired_quota = max(int(acc.get("quota_mb") or 1024), min_needed_mb, 1024)
+        if max_mb != UNLIMITED:
+            desired_quota = min(desired_quota, max_mb)
+
+        conflict_alias = db.query(Alias).filter_by(source=email_addr).first()
+        if conflict_alias:
+            db.delete(conflict_alias)
+            db.commit()
+
+        if use_cpanel_passwords and cpanel_hash:
+            target_hash = cpanel_hash
+            password_out = "(same as cPanel)"
+            password_mode = "cpanel"
+        else:
+            new_password = generate_random_password(16)
+            target_hash = hash_password(new_password)
+            password_out = new_password
+            password_mode = "random"
+
+        mbox = db.query(Mailbox).filter_by(email=email_addr).first()
+        created_new = False
+
+        if not mbox:
+            created_new = True
+            mbox = Mailbox(
+                domain_id=domain.id,
+                local_part=local_part,
+                email=email_addr,
+                password_hash=target_hash,
+                display_name=local_part,
+                quota_mb=desired_quota,
+                active=True,
+            )
+            db.add(mbox)
+            db.commit()
+        else:
+            if reset_existing_passwords:
+                mbox.password_hash = target_hash
+                mbox.token_version += 1
+            else:
+                password_out = "(unchanged)"
+                password_mode = "unchanged"
+            if mbox.quota_mb != UNLIMITED and mbox.quota_mb < desired_quota:
+                mbox.quota_mb = desired_quota
+            mbox.active = True
+            db.commit()
+
+        ins_count, skip_count, folder_counts = _append_account_messages_to_dovecot(email_addr, messages)
+        total_imported_msgs += ins_count
+        total_skipped_msgs += skip_count
+
+        existing_mids = {
+            row[0]
+            for row in db.query(MailMessage.message_id)
+            .filter(
+                MailMessage.message_id != "",
+                (MailMessage.user_email == email_addr) | (MailMessage.sender == email_addr),
+            )
+            .all()
+        }
+        added_logs = 0
+        for meta in messages:
+            role = meta.get("role") or ""
+            tf = (meta.get("target_folder") or "").upper()
+            if role not in ("inbox", "sent") and tf not in ("INBOX", "SENT"):
+                continue
+            mid = str(meta.get("message_id") or "").strip()[:500]
+            if mid and mid in existing_mids:
+                continue
+
+            when = datetime.datetime.fromtimestamp(
+                _clamp_ts(float(meta.get("internal_ts") or time.time())), tz=datetime.timezone.utc
+            )
+            sender = str(meta.get("sender") or "").lower()[:320]
+            sender_dom = sender.rpartition("@")[2] if "@" in sender else ""
+            rcpts = [str(r).lower()[:320] for r in (meta.get("recipients") or []) if "@" in str(r)]
+            is_sent = role == "sent" or tf == "SENT" or sender == email_addr
+
+            if is_sent:
+                if not sender:
+                    sender, sender_dom = email_addr, dom_name
+                if not rcpts:
+                    continue
+                ext_count = sum(1 for r in rcpts if r.rpartition("@")[2] not in local_domain_names)
+                direction = "outbound" if ext_count > 0 else "internal"
+                user_email_val = email_addr
+                source_val = "webmail"
+            else:
+                if email_addr not in rcpts:
+                    rcpts = [email_addr]
+                ext_count = 0
+                direction = "internal" if sender_dom in local_domain_names else "inbound"
+                user_email_val = sender if sender_dom in local_domain_names else ""
+                source_val = "smtp"
+
+            mm = MailMessage(
+                queue_id=None,
+                created_at=when,
+                finished_at=when,
+                source=source_val,
+                sasl_user=email_addr if is_sent else "",
+                user_email=user_email_val,
+                sender=sender,
+                sender_domain=sender_dom[:253],
+                message_id=mid,
+                subject=str(meta.get("subject") or "")[:500],
+                size=int(meta.get("size") or 0),
+                nrcpt=len(rcpts),
+                direction=direction,
+                status="delivered",
+                has_attachment=bool(meta.get("has_attachment")),
+                external_rcpts=ext_count,
+            )
+            for r in rcpts[:25]:
+                r_dom = r.rpartition("@")[2][:253]
+                mm.deliveries.append(
+                    MailDelivery(
+                        recipient=r,
+                        recipient_domain=r_dom,
+                        orig_recipient=r,
+                        is_local=r_dom in local_domain_names,
+                        status="sent",
+                        dsn="2.0.0",
+                        relay="cpanel-import",
+                        delay=0.0,
+                        response="250 2.0.0 Imported from cPanel backup",
+                        updated_at=when,
+                    )
+                )
+            db.add(mm)
+            if mid:
+                existing_mids.add(mid)
+            added_logs += 1
+
+        if added_logs:
+            db.commit()
+
+        results.append(
+            {
+                "email": email_addr,
+                "domain": dom_name,
+                "password": password_out,
+                "password_mode": password_mode,
+                "created": created_new,
+                "messages_imported": ins_count,
+                "messages_skipped": skip_count,
+                "folders": folder_counts,
+            }
+        )
+
+    return {
+        "domains_created": domains_created,
+        "mailboxes_total": len(results),
+        "messages_imported": total_imported_msgs,
+        "messages_skipped": total_skipped_msgs,
+        "accounts": results,
+    }
+
+
 def import_backup_archive(
     db: Session,
     archive_path: Path,
@@ -567,227 +802,11 @@ def import_backup_archive(
         extract_dir = Path(tmpdir)
         _safe_extract_archive(archive_path, extract_dir)
         accounts = _discover_accounts_from_extracted(extract_dir)
-
-        accounts_by_domain: dict[str, list[dict[str, Any]]] = {}
-        for acc in accounts:
-            accounts_by_domain.setdefault(acc["domain"], []).append(acc)
-
-        domains_by_name: dict[str, Domain] = {}
-        domains_created: list[str] = []
-
-        for dom_name, dom_accounts in accounts_by_domain.items():
-            domain = db.query(Domain).filter_by(name=dom_name).first()
-            if not domain:
-                if not is_super:
-                    raise HTTPException(
-                        403, f"Domain {dom_name} does not exist yet. Only a super administrator can create new domains."
-                    )
-                limit = int(get_setting(db, "default_domain_storage_mb") or 0)
-                default_q = int(get_setting(db, "default_quota_mb") or 0)
-                if default_q == UNLIMITED and (limit != UNLIMITED or max_mailbox_mb(db) != UNLIMITED):
-                    default_q = smallest(1024, max_mailbox_mb(db), limit)
-                domain = Domain(
-                    name=dom_name,
-                    default_quota_mb=smallest(default_q, max_mailbox_mb(db), limit) if default_q else UNLIMITED,
-                    storage_limit_mb=limit,
-                    active=True,
-                )
-                generate_dkim(domain)
-                db.add(domain)
-                db.commit()
-                db.refresh(domain)
-                write_selector_map(db)
-                if auto_enabled(db):
-                    try:
-                        ensure_postmaster(db, domain)
-                    except Exception:
-                        db.rollback()
-                domains_created.append(dom_name)
-            else:
-                if allowed_domain_ids is not None and domain.id not in allowed_domain_ids:
-                    raise HTTPException(403, f"You do not have permission to import into domain {dom_name}")
-
-            if domain.storage_limit_mb != UNLIMITED:
-                existing_alloc = sum(
-                    m.quota_mb for m in db.query(Mailbox).filter_by(domain_id=domain.id).all() if m.quota_mb != UNLIMITED
-                )
-                needed_alloc = sum(int(a.get("quota_mb") or 1024) for a in dom_accounts)
-                if existing_alloc + needed_alloc > domain.storage_limit_mb:
-                    domain.storage_limit_mb = existing_alloc + needed_alloc + 10240
-                    db.commit()
-
-            domains_by_name[dom_name] = domain
-
-        local_domain_names = {d.name.lower() for d in db.query(Domain).all()}
-        results: list[dict[str, Any]] = []
-        total_imported_msgs = 0
-        total_skipped_msgs = 0
-
-        for acc in accounts:
-            email_addr = acc["email"]
-            local_part = acc["local_part"]
-            dom_name = acc["domain"]
-            domain = domains_by_name[dom_name]
-            messages: list[dict[str, Any]] = acc.get("messages") or []
-            cpanel_hash = str(acc.get("password_hash") or "").strip()
-
-            total_bytes = sum(int(m.get("size") or 0) for m in messages)
-            min_needed_mb = int(total_bytes / (1024 * 1024)) + 512
-            max_mb = max_mailbox_mb(db)
-            desired_quota = max(int(acc.get("quota_mb") or 1024), min_needed_mb, 1024)
-            if max_mb != UNLIMITED:
-                desired_quota = min(desired_quota, max_mb)
-
-            conflict_alias = db.query(Alias).filter_by(source=email_addr).first()
-            if conflict_alias:
-                db.delete(conflict_alias)
-                db.commit()
-
-            if use_cpanel_passwords and cpanel_hash:
-                target_hash = cpanel_hash
-                password_out = "(same as cPanel)"
-                password_mode = "cpanel"
-            else:
-                new_password = generate_random_password(16)
-                target_hash = hash_password(new_password)
-                password_out = new_password
-                password_mode = "random"
-
-            mbox = db.query(Mailbox).filter_by(email=email_addr).first()
-            created_new = False
-
-            if not mbox:
-                created_new = True
-                mbox = Mailbox(
-                    domain_id=domain.id,
-                    local_part=local_part,
-                    email=email_addr,
-                    password_hash=target_hash,
-                    display_name=local_part,
-                    quota_mb=desired_quota,
-                    active=True,
-                )
-                db.add(mbox)
-                db.commit()
-            else:
-                if reset_existing_passwords:
-                    mbox.password_hash = target_hash
-                    mbox.token_version += 1
-                else:
-                    password_out = "(unchanged)"
-                    password_mode = "unchanged"
-                if mbox.quota_mb != UNLIMITED and mbox.quota_mb < desired_quota:
-                    mbox.quota_mb = desired_quota
-                mbox.active = True
-                db.commit()
-
-            ins_count, skip_count, folder_counts = _append_account_messages_to_dovecot(email_addr, messages)
-            total_imported_msgs += ins_count
-            total_skipped_msgs += skip_count
-
-            existing_mids = {
-                row[0]
-                for row in db.query(MailMessage.message_id)
-                .filter(
-                    MailMessage.message_id != "",
-                    (MailMessage.user_email == email_addr) | (MailMessage.sender == email_addr),
-                )
-                .all()
-            }
-            added_logs = 0
-            for meta in messages:
-                role = meta.get("role") or ""
-                tf = (meta.get("target_folder") or "").upper()
-                if role not in ("inbox", "sent") and tf not in ("INBOX", "SENT"):
-                    continue
-                mid = str(meta.get("message_id") or "").strip()[:500]
-                if mid and mid in existing_mids:
-                    continue
-
-                when = datetime.datetime.fromtimestamp(
-                    _clamp_ts(float(meta.get("internal_ts") or time.time())), tz=datetime.timezone.utc
-                )
-                sender = str(meta.get("sender") or "").lower()[:320]
-                sender_dom = sender.rpartition("@")[2] if "@" in sender else ""
-                rcpts = [str(r).lower()[:320] for r in (meta.get("recipients") or []) if "@" in str(r)]
-                is_sent = role == "sent" or tf == "SENT" or sender == email_addr
-
-                if is_sent:
-                    if not sender:
-                        sender, sender_dom = email_addr, dom_name
-                    if not rcpts:
-                        continue
-                    ext_count = sum(1 for r in rcpts if r.rpartition("@")[2] not in local_domain_names)
-                    direction = "outbound" if ext_count > 0 else "internal"
-                    user_email_val = email_addr
-                    source_val = "webmail"
-                else:
-                    if email_addr not in rcpts:
-                        rcpts = [email_addr]
-                    ext_count = 0
-                    direction = "internal" if sender_dom in local_domain_names else "inbound"
-                    user_email_val = sender if sender_dom in local_domain_names else ""
-                    source_val = "smtp"
-
-                mm = MailMessage(
-                    queue_id=None,
-                    created_at=when,
-                    finished_at=when,
-                    source=source_val,
-                    sasl_user=email_addr if is_sent else "",
-                    user_email=user_email_val,
-                    sender=sender,
-                    sender_domain=sender_dom[:253],
-                    message_id=mid,
-                    subject=str(meta.get("subject") or "")[:500],
-                    size=int(meta.get("size") or 0),
-                    nrcpt=len(rcpts),
-                    direction=direction,
-                    status="delivered",
-                    has_attachment=bool(meta.get("has_attachment")),
-                    external_rcpts=ext_count,
-                )
-                for r in rcpts[:25]:
-                    r_dom = r.rpartition("@")[2][:253]
-                    mm.deliveries.append(
-                        MailDelivery(
-                            recipient=r,
-                            recipient_domain=r_dom,
-                            orig_recipient=r,
-                            is_local=r_dom in local_domain_names,
-                            status="sent",
-                            dsn="2.0.0",
-                            relay="cpanel-import",
-                            delay=0.0,
-                            response="250 2.0.0 Imported from cPanel backup",
-                            updated_at=when,
-                        )
-                    )
-                db.add(mm)
-                if mid:
-                    existing_mids.add(mid)
-                added_logs += 1
-
-            if added_logs:
-                db.commit()
-
-            results.append(
-                {
-                    "email": email_addr,
-                    "domain": dom_name,
-                    "password": password_out,
-                    "password_mode": password_mode,
-                    "created": created_new,
-                    "messages_imported": ins_count,
-                    "messages_skipped": skip_count,
-                    "folders": folder_counts,
-                }
-            )
-
-        return {
-            "domains_created": domains_created,
-            "mailboxes_total": len(results),
-            "messages_imported": total_imported_msgs,
-            "messages_skipped": total_skipped_msgs,
-            "accounts": results,
-        }
+        return import_discovered_accounts(
+            db=db,
+            accounts=accounts,
+            allowed_domain_ids=allowed_domain_ids,
+            is_super=is_super,
+            use_cpanel_passwords=use_cpanel_passwords,
+            reset_existing_passwords=reset_existing_passwords,
+        )
