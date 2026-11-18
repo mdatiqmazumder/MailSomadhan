@@ -19,7 +19,6 @@ ACME_ROOT=/var/www/mailsomadhan-acme
 API_PORT=18080
 WEB_INTERNAL_PORT=13000
 IMAP_INTERNAL_PORT=10143   # loopback-only IMAP used by the webmail
-CRED_FILE=/root/mailsomadhan-credentials.txt
 LOG_FILE=/var/log/mailsomadhan-install.log
 
 export DEBIAN_FRONTEND=noninteractive
@@ -1034,18 +1033,7 @@ if ! curl -fsS --max-time 10 "http://127.0.0.1:$API_PORT/api/health" >/dev/null 
   curl -fsS --max-time 10 "http://127.0.0.1:$API_PORT/api/health" >/dev/null 2>&1 || problems="$problems api-not-responding"
 fi
 
-if [ "$FIRST_INSTALL" -eq 1 ]; then
-  umask 077
-  cat > "$CRED_FILE" <<EOF
-MailSomadhan
-Panel:    https://$MAIL_HOSTNAME:$WEB_PORT
-Username: admin
-Password: $ADMIN_PASS
-
-Change this password after the first sign-in (Settings), then delete this file.
-EOF
-  umask 022
-fi
+rm -f /root/mailsomadhan-credentials.txt
 
 echo
 if [ -n "$problems" ]; then
@@ -1059,7 +1047,7 @@ echo "  Web panel:   https://$MAIL_HOSTNAME:$WEB_PORT"
 if [ "$FIRST_INSTALL" -eq 1 ]; then
   echo "  Username:    admin"
   echo "  Password:    $ADMIN_PASS"
-  echo "               (also saved in $CRED_FILE)"
+  echo "               (save it now; run 'sudo mailsomadhan reset-admin-password' if needed)"
 fi
 if [ "$LE_OK" -ne 1 ]; then
   echo
