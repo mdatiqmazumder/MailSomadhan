@@ -1,7 +1,8 @@
 "use client";
 
-import { CheckCircle2, CircleAlert, CloudUpload, ExternalLink, KeyRound, LogIn, Loader2, Play, Plug, RefreshCw, Unplug } from "lucide-react";
+import { CheckCircle2, CircleAlert, CloudUpload, ExternalLink, KeyRound, LogIn, Loader2, Play, Plug, RefreshCw, Unplug, Upload } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ImportBackupModal } from "@/components/ImportBackupModal";
 import { api, formatBytes, formatDate, useLoad } from "@/lib/api";
 import { Badge, Button, Card, CopyText, Empty, Field, Input, Notice, PageHeader, PageSkeleton, Segmented, Select, Table, Textarea, Toggle, confirmDialog, cx, toast } from "@/components/ui";
 
@@ -25,6 +26,7 @@ export default function Backups() {
   const [filesError, setFilesError] = useState("");
   const [watching, setWatching] = useState(false);
   const [log, setLog] = useState("");
+  const [importing, setImporting] = useState(false);
 
   const loadFiles = useCallback(async () => {
     try {
@@ -88,6 +90,7 @@ export default function Backups() {
         action={
           <>
             <a href={DOCS} target="_blank" rel="noopener noreferrer"><Button variant="ghost"><ExternalLink className="h-4 w-4" /> Setup guide</Button></a>
+            <Button onClick={() => setImporting(true)}><Upload className="h-4 w-4" /> Import mail backup</Button>
             <Button variant="primary" onClick={runNow} disabled={!ready || watching}><Play className="h-4 w-4" /> Back up now</Button>
           </>
         }
@@ -161,6 +164,7 @@ export default function Backups() {
       <p className="mt-3 text-xs text-muted">
         To restore, download a file from Drive and follow the restore steps in the <a className="text-accent underline" href={DOCS} target="_blank" rel="noopener noreferrer">backup guide</a>. Backups can only be opened with the passphrase.
       </p>
+      {importing && <ImportBackupModal onClose={() => setImporting(false)} />}
     </>
   );
 }

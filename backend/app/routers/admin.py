@@ -3,7 +3,7 @@ import re
 import smtplib
 import ssl
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -267,6 +267,44 @@ def create_mailbox(body: MailboxIn, db: Session = Depends(get_db), ctx: AdminCtx
     out = _mailbox_out(mbox)
     out["welcome_sent"] = deliver_welcome(db, mbox) if body.send_welcome else False
     return out
+
+
+@scoped.post("/mailboxes/import-backup")
+async def import_mailbox_backup(
+    file: UploadFile = File(...),
+    use_cpanel_passwords: bool = Form(default=True),
+    reset_existing_passwords: bool = Form(default=True),
+    db: Session = Depends(get_db),
+    ctx: AdminCtx = Depends(require_perm("mailboxes.create")),
+):
+    """One-click import of a cPanel email backup archive (.tar.gz / .tgz / .zip).
+    Creates missing domains (super_admin), creates/updates mailboxes (preserving the exact
+    cPanel password hashes by default, or generating random passwords), and imports all
+    Sent & Received messages into Dovecot and the message log."""
+    import os
+    import shutil
+    import tempfile
+    from pathlib import Path
+    from ..cpanel_import import import_backup_archive
+
+    suffix = ".zip" if (file.filename or "").lower().endswith(".zip") else ".tar.gz"
+    fd, tmp_path = tempfile.mkstemp(prefix="ms-backup-upload-", suffix=suffix)
+    try:
+        with os.fdopen(fd, "wb") as out_fh:
+            shutil.copyfileobj(file.file, out_fh, length=1024 * 1024)
+        return import_backup_archive(
+            db=db,
+            archive_path=Path(tmp_path),
+            allowed_domain_ids=ctx.domain_ids,
+            is_super=ctx.is_super,
+            use_cpanel_passwords=use_cpanel_passwords,
+            reset_existing_passwords=reset_existing_passwords,
+        )
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 @scoped.post("/mailboxes/{mailbox_id}/access")

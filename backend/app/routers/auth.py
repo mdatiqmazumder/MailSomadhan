@@ -96,6 +96,8 @@ def login(body: LoginIn, request: Request, response: Response, db: Session = Dep
         ok = verify_password(body.password, mbox.password_hash if mbox else _DUMMY_HASH)
         if mbox and ok and mbox.active and mbox.domain.active:
             kind, account = "user", mbox
+            if not mbox.password_hash.startswith("{BLF-CRYPT}"):
+                mbox.password_hash = hash_password(body.password)
     else:
         admin = db.query(Admin).filter_by(username=ident).first()
         ok = verify_password(body.password, admin.password_hash if admin else _DUMMY_HASH)

@@ -1,12 +1,13 @@
 "use client";
 
-import { Forward, KeyRound, MailOpen, Megaphone, Pencil, Plug, Plus, Send, Trash2 } from "lucide-react";
+import { Forward, KeyRound, MailOpen, Megaphone, Pencil, Plug, Plus, Send, Trash2, Upload } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { api, formatDate, useLoad } from "@/lib/api";
 import { useAdmin } from "@/lib/admin";
 import { QuotaPicker, UNLIMITED, UsageBar, fitsLimit, formatLimit, smallestLimit } from "@/components/Storage";
 import { ConnectionSettings, type Connection } from "@/components/ConnectionSettings";
+import { ImportBackupModal } from "@/components/ImportBackupModal";
 import { AvatarEditor } from "@/components/ProfileCards";
 import { Avatar, Badge, Button, Card, Checkbox, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Toggle, toast, confirmDialog } from "@/components/ui";
 
@@ -60,6 +61,7 @@ export default function MailboxesPage() {
   const [filter, setFilter] = useState("");
   const [domainFilter, setDomainFilter] = useState("");
   const [adding, setAdding] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [editing, setEditing] = useState<Mailbox | null>(null);
   const [showing, setShowing] = useState<Mailbox | null>(null);
 
@@ -99,9 +101,16 @@ export default function MailboxesPage() {
         title="Mailboxes"
         description="Users sign in to webmail, IMAP and SMTP with their email address and password."
         action={
-          can("mailboxes.create") && <Button variant="primary" onClick={() => setAdding(true)} disabled={!domains.data?.length}>
-            <Plus className="h-4 w-4" /> Add mailbox
-          </Button>
+          can("mailboxes.create") && (
+            <>
+              <Button onClick={() => setImporting(true)}>
+                <Upload className="h-4 w-4" /> Import backup
+              </Button>
+              <Button variant="primary" onClick={() => setAdding(true)} disabled={!domains.data?.length}>
+                <Plus className="h-4 w-4" /> Add mailbox
+              </Button>
+            </>
+          )
         }
       />
       <div className="mb-3 flex flex-wrap gap-2">
@@ -169,6 +178,15 @@ export default function MailboxesPage() {
         )}
       </Card>
 
+      {importing && (
+        <ImportBackupModal
+          onClose={() => setImporting(false)}
+          onImported={() => {
+            domains.reload();
+            reload();
+          }}
+        />
+      )}
       {adding && domains.data && (
         <MailboxForm
           domains={domains.data}
