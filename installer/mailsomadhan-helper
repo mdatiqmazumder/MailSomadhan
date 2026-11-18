@@ -564,6 +564,46 @@ case "$cmd" in
     echo "TLS configuration synchronised"
     ;;
 
+  set-primary-host)
+    host="${1:-}"
+    valid_host "$host" || die "invalid hostname"
+    list_hosts | grep -qxF "$host" || die "unknown host: add it in the panel first"
+    dir="$TLS_DIR/$host"
+    if [ ! -f "$dir/fullchain.pem" ] || [ ! -f "$dir/privkey.pem" ]; then
+      if [ -f "/etc/letsencrypt/live/$host/fullchain.pem" ]; then
+        install -d -m 755 "$dir"
+        install -m 644 "/etc/letsencrypt/live/$host/fullchain.pem" "$dir/fullchain.pem"
+        install -m 600 "/etc/letsencrypt/live/$host/privkey.pem" "$dir/privkey.pem"
+      else
+        install -d -m 755 "$dir"
+        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+          -subj "/CN=$host" -addext "subjectAltName=DNS:$host" \
+          -keyout "$dir/privkey.pem" -out "$dir/fullchain.pem" 2>/dev/null
+        chmod 600 "$dir/privkey.pem"
+        chmod 644 "$dir/fullchain.pem"
+      fi
+    fi
+    MAIL_HOSTNAME="$host"
+    for f in "$CONF" /etc/mailsomadhan/install.conf; do
+      if [ -f "$f" ]; then
+        sed -i '/^MAIL_HOSTNAME=/d' "$f"
+        echo "MAIL_HOSTNAME='$host'" >> "$f"
+      fi
+    done
+    if [ -f /etc/mailsomadhan/mailsomadhan.env ]; then
+      sed -i '/^MAILSOMADHAN_PRIMARY_HOSTNAME=/d' /etc/mailsomadhan/mailsomadhan.env
+      echo "MAILSOMADHAN_PRIMARY_HOSTNAME=$host" >> /etc/mailsomadhan/mailsomadhan.env
+    fi
+    postconf -e "myhostname = $host" "smtpd_tls_chain_files = $dir/privkey.pem, $dir/fullchain.pem"
+    if [ -f /etc/dovecot/dovecot.conf ]; then
+      sed -i "s#^ssl_cert = <.*#ssl_cert = <$dir/fullchain.pem#" /etc/dovecot/dovecot.conf
+      sed -i "s#^ssl_key = <.*#ssl_key = <$dir/privkey.pem#" /etc/dovecot/dovecot.conf
+      sed -i "s#^  postmaster_address = .*#  postmaster_address = postmaster@$host#" /etc/dovecot/dovecot.conf
+    fi
+    sync_tls
+    echo "primary host set to $host"
+    ;;
+
   tls-start)
     # tls-start <http|dns|cloudflare> <host> [email]: issue a certificate in the background.
     method="${1:-}"; host="${2:-}"; email="${3:-}"

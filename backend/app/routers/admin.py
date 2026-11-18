@@ -643,6 +643,31 @@ def issue_cert(host_id: int, db: Session = Depends(get_db)):
     return _host_out(host)
 
 
+@router.post("/hosts/{host_id}/primary")
+def set_primary_host(host_id: int, db: Session = Depends(get_db)):
+    host = db.get(Host, host_id)
+    if not host:
+        raise HTTPException(404, "Host not found")
+    if host.is_primary:
+        return _host_out(host)
+    prev = db.query(Host).filter_by(is_primary=True).first()
+    db.query(Host).update({Host.is_primary: False})
+    host.is_primary = True
+    db.commit()
+    write_hosts_file(db)
+    ok, output = run_helper("set-primary-host", host.hostname, timeout=60)
+    if not ok:
+        db.query(Host).update({Host.is_primary: False})
+        if prev:
+            prev.is_primary = True
+        db.commit()
+        write_hosts_file(db)
+        raise HTTPException(502, f"Could not switch primary host: {output[-1000:]}")
+    from ..config import settings
+    settings.primary_hostname = host.hostname
+    return _host_out(host)
+
+
 @router.delete("/hosts/{host_id}")
 def delete_host(host_id: int, db: Session = Depends(get_db)):
     host = db.get(Host, host_id)

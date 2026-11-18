@@ -10,7 +10,7 @@ import {
   Badge, Button, Card, Empty, Field, IconButton, Input, Modal, PageHeader, Pagination, Select, Table, Tabs, Textarea, confirmDialog, toast,
 } from "@/components/ui";
 
-type Tab = "campaigns" | "suppressions" | "limits";
+type Tab = "campaigns" | "unsubscribed" | "suppressions" | "limits";
 
 export default function AdminCampaigns() {
   const [tab, setTab] = useState<Tab>("campaigns");
@@ -19,9 +19,19 @@ export default function AdminCampaigns() {
     <>
       <PageHeader title="Campaigns" description="Individual sending by your users: oversee running campaigns, approve large ones, and manage limits and the do-not-send list." />
       <div className="mb-5">
-        <Tabs value={tab} onChange={setTab} tabs={[{ value: "campaigns", label: "Campaigns" }, { value: "suppressions", label: "Do-not-send list" }, ...(isSuper ? [{ value: "limits" as Tab, label: "Limits" }] : [])]} />
+        <Tabs
+          value={tab}
+          onChange={setTab}
+          tabs={[
+            { value: "campaigns", label: "Campaigns" },
+            { value: "unsubscribed", label: "Unsubscribed" },
+            { value: "suppressions", label: "Do-not-send list" },
+            ...(isSuper ? [{ value: "limits" as Tab, label: "Limits" }] : []),
+          ]}
+        />
       </div>
       {tab === "campaigns" && <CampaignTable />}
+      {tab === "unsubscribed" && <Suppressions fixedReason="unsubscribed" />}
       {tab === "suppressions" && <Suppressions />}
       {tab === "limits" && isSuper && <LimitsCard />}
     </>
@@ -96,26 +106,33 @@ function CampaignTable() {
 
 type Sup = { id: number; email: string; domain: string; reason: string; note: string; created_at: string };
 
-function Suppressions() {
+function Suppressions({ fixedReason = "" }: { fixedReason?: string }) {
   const domains = useLoad<{ id: number; name: string }[]>("/admin/domains");
   const [q, setQ] = useState("");
-  const [reason, setReason] = useState("");
+  const [reason, setReason] = useState(fixedReason);
   const [page, setPage] = useState(1);
   const [data, setData] = useState<{ total: number; items: Sup[] } | null>(null);
   const [adding, setAdding] = useState(false);
   const [tick, setTick] = useState(0);
 
+  const activeReason = fixedReason || reason;
+
   useEffect(() => {
     const t = setTimeout(() => {
-      api<{ total: number; items: Sup[] }>(`/admin/suppressions?q=${encodeURIComponent(q)}&reason=${reason}&page=${page}`).then(setData).catch(() => {});
+      api<{ total: number; items: Sup[] }>(`/admin/suppressions?q=${encodeURIComponent(q)}&reason=${activeReason}&page=${page}`).then(setData).catch(() => {});
     }, 200);
     return () => clearTimeout(t);
-  }, [q, reason, page, tick]);
+  }, [q, activeReason, page, tick]);
 
   async function remove(s: Sup) {
-    if (!(await confirmDialog({ title: `Allow ${s.email} again?`, message: "Future campaigns from this domain can reach this address again.", confirmLabel: "Remove", danger: true }))) return;
-    await api(`/admin/suppressions/${s.id}`, { method: "DELETE" });
-    setTick((t) => t + 1);
+    if (!(await confirmDialog({ title: `Allow ${s.email} again?`, message: "Future campaigns from this domain can reach this address again.", confirmLabel: "Delete", danger: true }))) return;
+    try {
+      await api(`/admin/suppressions/${s.id}`, { method: "DELETE" });
+      toast.ok(`${s.email} removed from list`);
+      setTick((t) => t + 1);
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   }
 
   return (
@@ -125,18 +142,24 @@ function Suppressions() {
           <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-faint" />
           <Input value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} placeholder="Search address" className="pl-9" aria-label="Search" />
         </div>
-        <Select value={reason} onChange={(e) => { setReason(e.target.value); setPage(1); }} className="w-auto" aria-label="Reason">
-          <option value="">All reasons</option>
-          <option value="unsubscribed">Unsubscribed</option>
-          <option value="bounced">Bounced</option>
-          <option value="manual">Added by admin</option>
-        </Select>
+        {!fixedReason && (
+          <Select value={reason} onChange={(e) => { setReason(e.target.value); setPage(1); }} className="w-auto" aria-label="Reason">
+            <option value="">All reasons</option>
+            <option value="unsubscribed">Unsubscribed</option>
+            <option value="bounced">Bounced</option>
+            <option value="manual">Added by admin</option>
+          </Select>
+        )}
         <span className="flex-1" />
-        <Button onClick={() => setAdding(true)}><Plus className="h-4 w-4" /> Add addresses</Button>
+        {!fixedReason && <Button onClick={() => setAdding(true)}><Plus className="h-4 w-4" /> Add addresses</Button>}
       </div>
-      <p className="px-5 pt-3 text-sm text-muted">Campaigns never send to these addresses. People who unsubscribe and addresses that hard-bounce are added automatically.</p>
+      <p className="px-5 pt-3 text-sm text-muted">
+        {fixedReason === "unsubscribed"
+          ? "Recipients who clicked the unsubscribe link in a campaign email. Delete an entry to allow campaigns to reach them again."
+          : "Campaigns never send to these addresses. People who unsubscribe and addresses that hard-bounce are added automatically."}
+      </p>
       {!data?.items.length ? (
-        <Empty icon={UserX} title="The list is empty" />
+        <Empty icon={UserX} title={fixedReason === "unsubscribed" ? "No unsubscribed recipients" : "The list is empty"} />
       ) : (
         <>
           <div className="mt-3">

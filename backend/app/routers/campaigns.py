@@ -255,6 +255,47 @@ def list_campaigns(user: Mailbox = Depends(require_user), db: Session = Depends(
     return {"items": [campaign_out(c, cnt[c.id]) for c in items], "limits": limits(db, user.id)}
 
 
+@user_router.get("/campaigns/unsubscribed")
+def list_user_unsubscribed(
+    q: str = "",
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    user: Mailbox = Depends(require_campaigns),
+    db: Session = Depends(get_db),
+):
+    """List recipients who unsubscribed via link for this user's domain."""
+    query = select(Suppression).where(
+        Suppression.domain_id == user.domain_id,
+        Suppression.reason == "unsubscribed",
+    )
+    if q.strip():
+        query = query.where(Suppression.email.like(f"%{q.strip().lower()}%"))
+    total = db.execute(select(func.count()).select_from(query.subquery())).scalar_one()
+    rows = db.execute(query.order_by(Suppression.id.desc()).offset((page - 1) * size).limit(size)).scalars().all()
+    return {
+        "total": total,
+        "items": [
+            {
+                "id": s.id,
+                "email": s.email,
+                "note": s.note,
+                "created_at": s.created_at.isoformat(),
+            }
+            for s in rows
+        ],
+    }
+
+
+@user_router.delete("/campaigns/unsubscribed/{sid}")
+def delete_user_unsubscribed(sid: int, user: Mailbox = Depends(require_campaigns), db: Session = Depends(get_db)):
+    s = db.get(Suppression, sid)
+    if not s or s.domain_id != user.domain_id or s.reason != "unsubscribed":
+        raise HTTPException(404, "Not found")
+    db.delete(s)
+    db.commit()
+    return {"ok": True}
+
+
 def own(db: Session, user: Mailbox, campaign_id: int) -> Campaign:
     c = db.get(Campaign, campaign_id)
     if not c or c.mailbox_id != user.id:

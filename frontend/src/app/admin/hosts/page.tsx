@@ -94,6 +94,24 @@ export default function HostsPage() {
     }
   }
 
+  async function makePrimary(h: Host) {
+    if (!(await confirmDialog({
+      title: `Make ${h.hostname} the primary host?`,
+      message: "Postfix, Dovecot, and the default panel identity will switch to this hostname. Make sure its DNS A/AAAA and PTR records point to this server.",
+      confirmLabel: "Make primary",
+    }))) return;
+    setBusy(true);
+    try {
+      await api(`/admin/hosts/${h.id}/primary`, { method: "POST" });
+      toast.ok(`${h.hostname} is now the primary host`);
+      reload();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function remove(h: Host) {
     if (!(await confirmDialog({ title: `Remove the host ${h.hostname}?`, danger: true }))) return;
     try {
@@ -144,9 +162,14 @@ export default function HostsPage() {
                       {h.tls.status === "trusted" ? "Renew" : "Issue certificate"}
                     </Button>
                     {!h.is_primary && (
-                      <IconButton label="Remove host" onClick={() => remove(h)}>
-                        <Trash2 className="h-4 w-4" />
-                      </IconButton>
+                      <>
+                        <Button size="sm" disabled={busy || !!active} onClick={() => makePrimary(h)}>
+                          Make primary
+                        </Button>
+                        <IconButton label="Remove host" onClick={() => remove(h)}>
+                          <Trash2 className="h-4 w-4" />
+                        </IconButton>
+                      </>
                     )}
                   </div>
                 </td>
