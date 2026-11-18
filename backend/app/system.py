@@ -257,6 +257,17 @@ def _resolve(name: str, rtype: str) -> list[str]:
         return []
 
 
+def bimi_logo_url(domain_name: str, primary_host: str) -> str:
+    port = "" if settings.web_port in (80, 443) else f":{settings.web_port}"
+    return f"https://{primary_host}{port}/api/public/bimi/{domain_name}.svg"
+
+
+def bimi_record_value(domain: Domain, primary_host: str) -> str:
+    url = bimi_logo_url(domain.name, primary_host)
+    vmc = (domain.bimi_vmc_url or "").strip()
+    return f"v=BIMI1; l={url}; a={vmc}" if vmc else f"v=BIMI1; l={url}"
+
+
 def dns_records(domain: Domain, primary_host: str, check: bool = True) -> list[dict]:
     name = domain.name
     dkim_value = f"v=DKIM1; k=rsa; p={domain.dkim_public}"
@@ -267,6 +278,13 @@ def dns_records(domain: Domain, primary_host: str, check: bool = True) -> list[d
         {"purpose": "DMARC", "type": "TXT", "host": f"_dmarc.{name}",
          "value": f"v=DMARC1; p=quarantine; rua=mailto:postmaster@{name}"},
     ]
+    if getattr(domain, "bimi_svg", ""):
+        records.append({
+            "purpose": "BIMI",
+            "type": "TXT",
+            "host": f"default._bimi.{name}",
+            "value": bimi_record_value(domain, primary_host),
+        })
     if not check:
         return records
     for rec in records:
@@ -284,6 +302,9 @@ def dns_records(domain: Domain, primary_host: str, check: bool = True) -> list[d
         elif rec["purpose"] == "DKIM":
             found = _resolve(rec["host"], "TXT")
             rec["ok"] = any(domain.dkim_public[:60] in t.replace(" ", "") for t in found)
+        elif rec["purpose"] == "BIMI":
+            found = [t for t in _resolve(rec["host"], "TXT") if t.lower().startswith("v=bimi1")]
+            rec["ok"] = bool(found)
         else:
             found = [t for t in _resolve(rec["host"], "TXT") if t.lower().startswith("v=dmarc1")]
             rec["ok"] = bool(found)

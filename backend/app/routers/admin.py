@@ -72,6 +72,7 @@ def _domain_out(d: Domain, counts: dict[int, int] | None = None, allocated: dict
         "used_kb": (used or {}).get(d.id, 0),
         "relay_id": d.relay_id, "relay_name": d.relay.name if d.relay else None,
         "dkim_selector": d.dkim_selector,
+        "has_bimi": bool(getattr(d, "bimi_svg", "")),
         "mailboxes": (counts or {}).get(d.id, 0),
         "catch_all": (catch_all or {}).get(d.id),
         "created_at": d.created_at.isoformat(),
@@ -192,6 +193,52 @@ def rotate_dkim(domain_id: int, db: Session = Depends(get_db)):
     # With Cloudflare connected, the new key is published right away.
     cloudflare = publish_dkim(db, domain)
     return {"domain": domain.name, "records": dns_records(domain, _primary_host(db), check=False), "cloudflare": cloudflare}
+
+
+class BimiIn(BaseModel):
+    svg: str = Field(default="", max_length=262_144)
+    vmc_url: str = Field(default="", max_length=500)
+
+
+def _bimi_out(domain: Domain, primary_host: str) -> dict:
+    from ..system import bimi_logo_url, bimi_record_value
+    return {
+        "domain": domain.name,
+        "enabled": bool(domain.bimi_svg),
+        "svg": domain.bimi_svg,
+        "vmc_url": domain.bimi_vmc_url,
+        "logo_url": bimi_logo_url(domain.name, primary_host),
+        "dns_host": f"default._bimi.{domain.name}",
+        "dns_value": bimi_record_value(domain, primary_host) if domain.bimi_svg else "",
+    }
+
+
+@router.get("/domains/{domain_id}/bimi")
+def get_bimi(domain_id: int, db: Session = Depends(get_db)):
+    domain = db.get(Domain, domain_id)
+    if not domain:
+        raise HTTPException(404, "Domain not found")
+    return _bimi_out(domain, _primary_host(db))
+
+
+@router.put("/domains/{domain_id}/bimi")
+def set_bimi(domain_id: int, body: BimiIn, db: Session = Depends(get_db)):
+    domain = db.get(Domain, domain_id)
+    if not domain:
+        raise HTTPException(404, "Domain not found")
+    svg = body.svg.strip()
+    if svg:
+        if "<svg" not in svg.lower():
+            raise HTTPException(400, "The logo must be a valid SVG file containing an <svg> element")
+        if re.search(r"<script|on[a-z]+\s*=|javascript:", svg, re.I):
+            raise HTTPException(400, "BIMI SVG logos cannot contain scripts or event handlers")
+    vmc = body.vmc_url.strip()
+    if vmc and not vmc.startswith("https://"):
+        raise HTTPException(400, "VMC certificate URL must start with https://")
+    domain.bimi_svg = svg
+    domain.bimi_vmc_url = vmc if svg else ""
+    db.commit()
+    return _bimi_out(domain, _primary_host(db))
 
 
 # ---------------------------------------------------------------- mailboxes

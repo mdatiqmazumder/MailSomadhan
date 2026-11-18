@@ -1,12 +1,12 @@
 "use client";
 
-import { CheckCircle2, CircleAlert, Cloud, HardDrive, KeyRound, Plus, RefreshCw, Trash2, Wand2 } from "lucide-react";
+import { CheckCircle2, CircleAlert, Cloud, HardDrive, Image as ImageIcon, KeyRound, Plus, RefreshCw, Trash2, Upload, Wand2 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, useLoad } from "@/lib/api";
 import { useAdmin } from "@/lib/admin";
 import { GbInput, UNLIMITED, fitsLimit, formatLimit, formatMb, smallestLimit } from "@/components/Storage";
-import { Badge, Button, Card, Checkbox, CopyText, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Toggle, toast, confirmDialog } from "@/components/ui";
+import { Badge, Button, Card, Checkbox, CopyText, Empty, Field, IconButton, Input, Modal, PageHeader, Select, Spinner, Table, Textarea, Toggle, toast, confirmDialog } from "@/components/ui";
 import { CloudflareConnect, type CloudflareStatus } from "@/components/CloudflareConnect";
 
 type Domain = {
@@ -19,6 +19,7 @@ type Domain = {
   used_kb: number;
   relay_id: number | null;
   relay_name: string | null;
+  has_bimi?: boolean;
   mailboxes: number;
   catch_all: string | null;
 };
@@ -46,6 +47,7 @@ export default function DomainsPage() {
   const [busy, setBusy] = useState(false);
   const [dnsFor, setDnsFor] = useState<Domain | null>(null);
   const [storageFor, setStorageFor] = useState<Domain | null>(null);
+  const [bimiFor, setBimiFor] = useState<Domain | null>(null);
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
@@ -107,7 +109,10 @@ export default function DomainsPage() {
             {data.map((d) => (
               <tr key={d.id}>
                 <td>
-                  <span className="font-medium">{d.name}</span>
+                  <span className="inline-flex items-center gap-1.5 font-medium">
+                    {d.name}
+                    {d.has_bimi && <Badge tone="accent">BIMI</Badge>}
+                  </span>
                   {d.catch_all && (
                     <Link href="/admin/aliases" className="mt-0.5 block max-w-64 truncate text-[11px] text-muted hover:text-accent" title={`Catch-all: every unknown address goes to ${d.catch_all}`}>
                       Catch-all → {d.catch_all.split(",").join(", ")}
@@ -146,6 +151,7 @@ export default function DomainsPage() {
                 <td>
                   <div className="flex justify-end gap-1">
                     {isSuper && <IconButton label="Storage limits" onClick={() => setStorageFor(d)}><HardDrive className="h-4 w-4" /></IconButton>}
+                    {isSuper && <Button size="sm" onClick={() => setBimiFor(d)}><ImageIcon className="h-3.5 w-3.5" /> BIMI</Button>}
                     {can("domains.view") && <Button size="sm" onClick={() => setDnsFor(d)}>DNS records</Button>}
                     {isSuper && <IconButton label="Delete domain" onClick={() => remove(d)}>
                       <Trash2 className="h-4 w-4" />
@@ -174,6 +180,7 @@ export default function DomainsPage() {
 
       {dnsFor && <DnsModal domain={dnsFor} onClose={() => setDnsFor(null)} />}
       {storageFor && <StorageModal domain={storageFor} onClose={() => setStorageFor(null)} onSaved={() => { setStorageFor(null); reload(); }} />}
+      {bimiFor && <BimiModal domain={bimiFor} onClose={() => setBimiFor(null)} onSaved={() => { setBimiFor(null); reload(); }} />}
     </>
   );
 }
@@ -476,6 +483,162 @@ function StorageModal({ domain, onClose, onSaved }: { domain: Domain; onClose: (
           <Button type="submit" variant="primary" loading={busy} disabled={tooSmall || defaultTooBig}>Save</Button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+type BimiData = {
+  domain: string;
+  enabled: boolean;
+  svg: string;
+  vmc_url: string;
+  logo_url: string;
+  dns_host: string;
+  dns_value: string;
+};
+
+function BimiModal({ domain, onClose, onSaved }: { domain: Domain; onClose: () => void; onSaved: () => void }) {
+  const { data, loading } = useLoad<BimiData>(`/admin/domains/${domain.id}/bimi`);
+  const [svg, setSvg] = useState("");
+  const [vmcUrl, setVmcUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!data) return;
+    setSvg(data.svg || "");
+    setVmcUrl(data.vmc_url || "");
+  }, [data]);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await api<BimiData>(`/admin/domains/${domain.id}/bimi`, {
+        method: "PUT",
+        json: { svg, vmc_url: vmcUrl },
+      });
+      toast.ok(svg.trim() ? `BIMI saved for ${domain.name}` : `BIMI removed for ${domain.name}`);
+      onSaved();
+    } catch (err) {
+      toast.error((err as Error).message);
+      setBusy(false);
+    }
+  }
+
+  async function clearBimi() {
+    if (!(await confirmDialog({ title: `Remove BIMI logo for ${domain.name}?`, danger: true }))) return;
+    setBusy(true);
+    try {
+      await api<BimiData>(`/admin/domains/${domain.id}/bimi`, {
+        method: "PUT",
+        json: { svg: "", vmc_url: "" },
+      });
+      toast.ok(`BIMI removed for ${domain.name}`);
+      onSaved();
+    } catch (err) {
+      toast.error((err as Error).message);
+      setBusy(false);
+    }
+  }
+
+  const previewUri = svg.trim().toLowerCase().includes("<svg")
+    ? `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
+    : "";
+
+  return (
+    <Modal
+      title={`BIMI logo for ${domain.name}`}
+      description="Brand Indicators for Message Identification: show your brand logo next to emails in supported inboxes (requires DMARC p=quarantine or p=reject)."
+      onClose={onClose}
+      wide
+    >
+      {loading || !data ? (
+        <div className="p-6"><Spinner /></div>
+      ) : (
+        <form onSubmit={save} className="space-y-4">
+          <div className="flex flex-wrap items-center gap-4 rounded-xl border border-border bg-raised p-4">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-surface">
+              {previewUri ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={previewUri} alt={`${domain.name} BIMI preview`} className="h-12 w-12 object-contain" />
+              ) : (
+                <ImageIcon className="h-6 w-6 text-muted" />
+              )}
+            </div>
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <p className="text-sm font-medium">SVG Tiny PS Logo</p>
+              <p className="text-xs text-muted">Upload a square `.svg` logo (max 256 KB). MailSomadhan hosts it automatically at:</p>
+              <div className="flex items-center gap-1 rounded-lg border border-border bg-surface py-0.5 pr-1 pl-2.5">
+                <code className="min-w-0 flex-1 truncate font-mono text-xs">{data.logo_url}</code>
+                <CopyText value={data.logo_url} label="Copy BIMI logo URL" />
+              </div>
+            </div>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".svg,image/svg+xml"
+              hidden
+              onChange={async (e) => {
+                const f = e.target.files?.[0];
+                if (f) setSvg(await f.text());
+              }}
+            />
+            <Button onClick={() => fileRef.current?.click()}>
+              <Upload className="h-4 w-4" /> Upload SVG
+            </Button>
+          </div>
+
+          <Field label="SVG markup" hint="Paste SVG code or use Upload SVG above.">
+            <Textarea
+              value={svg}
+              onChange={(e) => setSvg(e.target.value)}
+              rows={5}
+              className="font-mono text-xs"
+              placeholder='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">…</svg>'
+            />
+          </Field>
+
+          <Field label="VMC certificate URL (optional)" hint="Required by Gmail for verified checkmark; leave empty if you don't have a Verified Mark Certificate (.pem).">
+            <Input
+              type="url"
+              value={vmcUrl}
+              onChange={(e) => setVmcUrl(e.target.value)}
+              placeholder="https://example.com/vmc.pem"
+            />
+          </Field>
+
+          {data.enabled && (
+            <div className="space-y-1.5 rounded-xl border border-border bg-raised p-3.5 text-xs">
+              <p className="font-medium text-text">DNS TXT record (also shown under DNS records)</p>
+              <div className="flex items-center gap-1">
+                <span className="text-muted">Host:</span>
+                <code className="font-mono">{data.dns_host}</code>
+                <CopyText value={data.dns_host} label="Copy BIMI host" />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-muted">Value:</span>
+                <code className="min-w-0 flex-1 truncate font-mono">{data.dns_value}</code>
+                <CopyText value={data.dns_value} label="Copy BIMI value" />
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              {data.enabled && (
+                <Button variant="danger" onClick={clearBimi} disabled={busy}>
+                  <Trash2 className="h-4 w-4" /> Remove BIMI
+                </Button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={onClose}>Cancel</Button>
+              <Button type="submit" variant="primary" loading={busy}>Save BIMI</Button>
+            </div>
+          </div>
+        </form>
+      )}
     </Modal>
   );
 }

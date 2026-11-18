@@ -8,77 +8,202 @@ ENV_FILE=/etc/mailsomadhan/mailsomadhan.env
 SERVICES=(postfix dovecot rspamd redis-server postgresql nginx fail2ban mailsomadhan-api mailsomadhan-web mailsomadhan-collector mailsomadhan-campaigns)
 
 need_root() {
-  [ "$(id -u)" -eq 0 ] || { echo "Run this command as root (sudo mailsomadhan $*)" >&2; exit 1; }
+  if [ "$(id -u)" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1; then
+      exec sudo "$0" "$@"
+    fi
+    echo "Run this command as root (sudo mailsomadhan $*)" >&2
+    exit 1
+  fi
 }
 
 cli() {
   (cd "$SRC_DIR/backend" && sudo -u mailsomadhan env MAILSOMADHAN_ENV_FILE="$ENV_FILE" "$APP_DIR/venv/bin/python" -m app.cli "$@")
 }
 
-case "${1:-help}" in
-  status)
-    for s in "${SERVICES[@]}"; do
-      printf '  %-16s %s\n' "$s" "$(systemctl is-active "$s" 2>/dev/null || true)"
-    done
-    ;;
-  info)
-    need_root info
-    # shellcheck disable=SC1091
-    . /etc/mailsomadhan/helper.conf
-    echo "Panel:     https://$MAIL_HOSTNAME:$WEB_PORT"
-    echo "Mail host: $MAIL_HOSTNAME  (SMTP 25/465/587, IMAP 993)"
-    echo "Initial credentials: /root/mailsomadhan-credentials.txt"
-    ;;
-  restart)
-    need_root restart
-    systemctl restart "${SERVICES[@]}"
-    echo "All services restarted"
-    ;;
-  logs)
-    journalctl -u mailsomadhan-api -u mailsomadhan-web -u postfix@- -u dovecot -u rspamd -n "${2:-100}" --no-pager
-    ;;
-  open-console)
-    need_root open-console
-    cli open-console
-    ;;
-  reset-admin-password)
-    need_root reset-admin-password
-    password="$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-20)"
-    cli reset-admin --password "$password"
-    echo "New password for 'admin': $password"
-    ;;
-  update)
-    need_root update
-    # Same path as the "Update now" button in the panel: runs detached, so a dropped SSH
-    # session cannot interrupt it half-way.
-    /usr/local/sbin/mailsomadhan-helper update-start
-    sleep 1
-    pid="$(systemctl show -p MainPID --value mailsomadhan-update 2>/dev/null || echo 0)"
-    if [ "${pid:-0}" != 0 ]; then
-      tail -n +1 -f --pid="$pid" /var/log/mailsomadhan-update.log
-    else
-      cat /var/log/mailsomadhan-update.log
-    fi
-    cat /var/lib/mailsomadhan/update-result.json; echo
-    ;;
-  uninstall)
-    need_root uninstall
-    shift
-    exec bash "$SRC_DIR/installer/uninstall.sh" "$@"
-    ;;
-  *)
-    cat <<EOF
-Usage: mailsomadhan <command>
+print_usage() {
+  cat <<EOF
+Usage: mailsomadhan [command]
 
+  (no command)           open interactive menu
+  details                show basic server info, domains/mailboxes count & login link
   status                 show the state of every service
   info                   show the panel address and mail ports
   restart                restart every service
   logs [lines]           show recent log output
   reset-admin-password   generate a new password for the admin user
   open-console           remove the console IP allowlist (if you locked yourself out)
+  change-port [port]     change the HTTPS port of the web panel
   update                 pull the latest version and re-apply the installation
   uninstall [--purge] [--remove-packages] [--yes]
                          remove MailSomadhan; mail and the database are kept unless --purge
 EOF
-    ;;
-esac
+}
+
+show_details() {
+  need_root details
+  # shellcheck disable=SC1091
+  . /etc/mailsomadhan/helper.conf
+  local ver="unknown" port_part="" base_url="" ip="" stats=""
+  [ -f "$SRC_DIR/VERSION" ] && ver="$(tr -dc '0-9A-Za-z.+-' < "$SRC_DIR/VERSION" 2>/dev/null || echo unknown)"
+  [ "${WEB_PORT:-8443}" != "443" ] && port_part=":$WEB_PORT"
+  base_url="https://${MAIL_HOSTNAME}${port_part}"
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+
+  stats="$(cd "$SRC_DIR/backend" && sudo -u mailsomadhan env MAILSOMADHAN_ENV_FILE="$ENV_FILE" "$APP_DIR/venv/bin/python" -c "from app.db import SessionLocal; from app.models import Domain, Mailbox; db=SessionLocal(); print(f'{db.query(Domain).count()} domain(s), {db.query(Mailbox).count()} mailbox(es)'); db.close()" 2>/dev/null || true)"
+
+  disk_info="$(df -h /var/vmail 2>/dev/null | awk 'NR==2 {printf "%s used / %s total (%s)", $3, $2, $5}' || true)"
+  [ -n "$disk_info" ] || disk_info="N/A"
+
+  echo "=============================================="
+  echo "  MailSomadhan Details"
+  echo "=============================================="
+  echo "  Version       : v$ver"
+  echo "  Primary Host  : $MAIL_HOSTNAME"
+  echo "  Panel Port    : $WEB_PORT (HTTPS)"
+  [ -n "$ip" ] && echo "  Server IP     : $ip"
+  [ -n "$stats" ] && echo "  Mail Data     : $stats"
+  echo "  Disk (/vmail) : $disk_info"
+  echo "----------------------------------------------"
+  echo "  Login Link    : $base_url/login"
+  echo "  Admin Panel   : $base_url/admin"
+  echo "  Webmail       : $base_url/mail"
+  [ -n "$ip" ] && echo "  IP Login Link : https://$ip${port_part}/login"
+  echo "  Mail Ports    : SMTP 25 / 465 (SSL) / 587 (STARTTLS), IMAP 993 (SSL)"
+  echo "  Admin User    : admin"
+  if [ -f /root/mailsomadhan-credentials.txt ]; then
+    echo "  Credentials   : /root/mailsomadhan-credentials.txt"
+  fi
+  echo "=============================================="
+}
+
+run_cmd() {
+  case "${1:-help}" in
+    details)
+      show_details
+      ;;
+    status)
+      for s in "${SERVICES[@]}"; do
+        printf '  %-24s %s\n' "$s" "$(systemctl is-active "$s" 2>/dev/null || true)"
+      done
+      ;;
+    info)
+      need_root info
+      # shellcheck disable=SC1091
+      . /etc/mailsomadhan/helper.conf
+      echo "Panel:     https://$MAIL_HOSTNAME:$WEB_PORT"
+      echo "Login:     https://$MAIL_HOSTNAME:$WEB_PORT/login"
+      echo "Mail host: $MAIL_HOSTNAME  (SMTP 25/465/587, IMAP 993)"
+      echo "Initial credentials: /root/mailsomadhan-credentials.txt"
+      ;;
+    restart)
+      need_root restart
+      systemctl restart "${SERVICES[@]}"
+      echo "All services restarted"
+      ;;
+    logs)
+      local lines="${2:-}"
+      if [ -z "$lines" ] && [ -t 0 ] && [ "${MS_INTERACTIVE:-0}" = "1" ]; then
+        read -rp "Number of log lines [100]: " lines
+      fi
+      journalctl -u mailsomadhan-api -u mailsomadhan-web -u postfix@- -u dovecot -u rspamd -n "${lines:-100}" --no-pager
+      ;;
+    open-console)
+      need_root open-console
+      cli open-console
+      ;;
+    reset-admin-password)
+      need_root reset-admin-password
+      password="$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-20)"
+      cli reset-admin --password "$password"
+      echo "New password for 'admin': $password"
+      ;;
+    change-port)
+      need_root change-port "${2:-}"
+      local new_port="${2:-}"
+      if [ -z "$new_port" ]; then
+        # shellcheck disable=SC1091
+        [ -f /etc/mailsomadhan/helper.conf ] && . /etc/mailsomadhan/helper.conf || true
+        read -rp "New HTTPS panel port (current: ${WEB_PORT:-8443}): " new_port
+      fi
+      [ -n "$new_port" ] || { echo "No port entered." >&2; exit 1; }
+      /usr/local/sbin/mailsomadhan-helper set-web-port "$new_port"
+      systemctl restart mailsomadhan-api
+      ;;
+    update)
+      need_root update
+      # Same path as the "Update now" button in the panel: runs detached, so a dropped SSH
+      # session cannot interrupt it half-way.
+      /usr/local/sbin/mailsomadhan-helper update-start
+      sleep 1
+      pid="$(systemctl show -p MainPID --value mailsomadhan-update 2>/dev/null || echo 0)"
+      if [ "${pid:-0}" != 0 ]; then
+        tail -n +1 -f --pid="$pid" /var/log/mailsomadhan-update.log
+      else
+        cat /var/log/mailsomadhan-update.log
+      fi
+      cat /var/lib/mailsomadhan-status/update-result.json 2>/dev/null || cat /var/lib/mailsomadhan/update-result.json 2>/dev/null || true
+      echo
+      ;;
+    uninstall)
+      need_root "$@"
+      shift
+      exec bash "$SRC_DIR/installer/uninstall.sh" "$@"
+      ;;
+    help|--help|-h)
+      print_usage
+      ;;
+    *)
+      print_usage
+      exit 1
+      ;;
+  esac
+}
+
+interactive_menu() {
+  export MS_INTERACTIVE=1
+  local ver="unknown"
+  [ -f "$SRC_DIR/VERSION" ] && ver="$(tr -dc '0-9A-Za-z.+-' < "$SRC_DIR/VERSION" 2>/dev/null || echo unknown)"
+  while true; do
+    echo
+    echo "=============================================="
+    echo "  MailSomadhan Management Console (v$ver)"
+    echo "=============================================="
+    echo "  1) View details           (login link & info)"
+    echo "  2) Service status         (status)"
+    echo "  3) Restart all services   (restart)"
+    echo "  4) View recent logs       (logs)"
+    echo "  5) Reset admin password   (reset-admin-password)"
+    echo "  6) Unlock console IPs     (open-console)"
+    echo "  7) Change panel port      (change-port)"
+    echo "  8) Update MailSomadhan    (update)"
+    echo "  9) Uninstall MailSomadhan (uninstall)"
+    echo "  0) Exit"
+    echo "=============================================="
+    read -rp "Select an option [0-9]: " choice || exit 0
+    echo
+    case "$choice" in
+      1) run_cmd details ;;
+      2) run_cmd status ;;
+      3) run_cmd restart ;;
+      4) run_cmd logs ;;
+      5) run_cmd reset-admin-password ;;
+      6) run_cmd open-console ;;
+      7) run_cmd change-port ;;
+      8) run_cmd update ;;
+      9) run_cmd uninstall ;;
+      0|q|Q|exit) exit 0 ;;
+      *) echo "Invalid option: $choice" ;;
+    esac
+    echo
+    read -rp "Press Enter to return to menu (or Ctrl+C to exit)..." _ || exit 0
+  done
+}
+
+if [ $# -eq 0 ] && [ -t 0 ]; then
+  interactive_menu
+elif [ $# -eq 0 ]; then
+  print_usage
+else
+  run_cmd "$@"
+fi

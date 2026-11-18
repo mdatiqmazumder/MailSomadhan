@@ -84,6 +84,18 @@ def public_info(db: Session = Depends(get_db)):
     return {"brand_name": get_setting(db, "brand_name")}
 
 
+@router.get("/public/bimi/{domain_name}.svg")
+def public_bimi_svg(domain_name: str, db: Session = Depends(get_db)):
+    domain = db.query(Domain).filter_by(name=domain_name.strip().lower(), active=True).first()
+    if not domain or not domain.bimi_svg:
+        raise HTTPException(404, "BIMI logo not found")
+    return Response(
+        content=domain.bimi_svg,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=3600", "X-Content-Type-Options": "nosniff"},
+    )
+
+
 @router.post("/auth/login")
 def login(body: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
     ip = client_ip(request)

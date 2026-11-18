@@ -23,6 +23,9 @@ COLUMNS = [
     ("mailboxes", "forward_to", "TEXT NOT NULL DEFAULT ''"),
     ("mailboxes", "forward_keep", "BOOLEAN NOT NULL DEFAULT true"),
     ("mailboxes", "avatar_version", "INTEGER NOT NULL DEFAULT 0"),
+    # 1.9: BIMI logo & VMC URL per domain
+    ("domains", "bimi_svg", "TEXT NOT NULL DEFAULT ''"),
+    ("domains", "bimi_vmc_url", "VARCHAR(500) NOT NULL DEFAULT ''"),
 ]
 
 

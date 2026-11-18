@@ -83,6 +83,8 @@ class Domain(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     dkim_selector: Mapped[str] = mapped_column(String(63), default="")
     dkim_public: Mapped[str] = mapped_column(Text, default="")
+    bimi_svg: Mapped[str] = mapped_column(Text, default="", server_default="")
+    bimi_vmc_url: Mapped[str] = mapped_column(String(500), default="", server_default="")
     default_quota_mb: Mapped[int] = mapped_column(Integer, default=1024)
     # Total storage the domain's mailboxes may be given together (sum of their quotas).
     storage_limit_mb: Mapped[int] = mapped_column(Integer, default=102400, server_default="102400")
