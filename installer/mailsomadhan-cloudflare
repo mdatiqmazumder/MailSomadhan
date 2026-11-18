@@ -104,7 +104,12 @@ def find_zone(token: str, domain: str) -> dict:
 
 
 def names(domain: str, selector: str) -> dict:
-    return {"apex": domain, "dmarc": f"_dmarc.{domain}", "dkim": f"{selector}._domainkey.{domain}"}
+    return {
+        "apex": domain,
+        "dmarc": f"_dmarc.{domain}",
+        "dkim": f"{selector}._domainkey.{domain}",
+        "bimi": f"default._bimi.{domain}",
+    }
 
 
 def unquote(content: str) -> str:
@@ -118,7 +123,7 @@ def unquote(content: str) -> str:
 def lookup(token: str, zone: dict, domain: str, selector: str) -> list[dict]:
     n = names(domain, selector)
     records = []
-    for rtype, name in (("MX", n["apex"]), ("TXT", n["apex"]), ("TXT", n["dmarc"]), ("TXT", n["dkim"])):
+    for rtype, name in (("MX", n["apex"]), ("TXT", n["apex"]), ("TXT", n["dmarc"]), ("TXT", n["dkim"]), ("TXT", n["bimi"])):
         res = call(token, "GET", f"/zones/{zone['id']}/dns_records", {"type": rtype, "name": name, "per_page": 100})
         for r in res.get("result") or []:
             records.append({"id": r["id"], "type": r["type"], "name": r["name"].lower(),
@@ -137,7 +142,7 @@ def check_record(rtype: str, name: str, content: str, n: dict, mx_targets: set[s
         return
     if rtype != "TXT" or not TXT_RE.match(content):
         die("only MX and TXT mail records can be changed")
-    prefix = {n["apex"]: "v=spf1", n["dmarc"]: "v=dmarc1", n["dkim"]: "v=dkim1"}.get(name)
+    prefix = {n["apex"]: "v=spf1", n["dmarc"]: "v=dmarc1", n["dkim"]: "v=dkim1", n["bimi"]: "v=bimi1"}.get(name)
     if not prefix:
         die(f"{name} is not a mail record of this domain")
     if not content.lower().startswith(prefix):

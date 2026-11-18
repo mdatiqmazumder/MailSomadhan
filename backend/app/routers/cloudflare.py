@@ -18,11 +18,11 @@ from ..db import get_db
 from ..deps import require_admin
 from ..dnsplan import host_plan, plan
 from ..models import Domain, Host
-from ..system import host_identity, run_helper, server_ips
+from ..system import bimi_record_value, host_identity, run_helper, server_ips
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
-PURPOSES = ("MX", "SPF", "DKIM", "DMARC")
+PURPOSES = ("MX", "SPF", "DKIM", "DMARC", "BIMI")
 
 # Local development has no helper and no Cloudflare: a small in-memory stand-in.
 _DEV = {"configured": False, "zones": ["example.com"], "records": [], "next": 1}
@@ -92,7 +92,9 @@ def _domain(db: Session, domain_id: int) -> Domain:
 
 def domain_plan(db: Session, domain: Domain) -> dict:
     found = _lookup(domain)
-    records = plan(domain.name, _primary_host(db), domain.dkim_selector, domain.dkim_public, found["records"])
+    host = _primary_host(db)
+    bimi_val = bimi_record_value(domain, host) if getattr(domain, "bimi_svg", "") else ""
+    records = plan(domain.name, host, domain.dkim_selector, domain.dkim_public, found["records"], bimi_value=bimi_val)
     return {"zone": found["zone"]["name"], "records": records}
 
 
@@ -145,9 +147,9 @@ def get_plan(domain_id: int, db: Session = Depends(get_db)):
 
 
 class ApplyIn(BaseModel):
-    purposes: list[str] = Field(min_length=1, max_length=4)
+    purposes: list[str] = Field(min_length=1, max_length=5)
     # Purposes whose existing records are all deleted and replaced by one fresh record.
-    fresh: list[str] = Field(default_factory=list, max_length=4)
+    fresh: list[str] = Field(default_factory=list, max_length=5)
 
 
 @router.post("/domains/{domain_id}/cloudflare")

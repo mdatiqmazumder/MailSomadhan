@@ -9,13 +9,16 @@ import re
 SPF_END_RE = re.compile(r"^([~?+-]?all|redirect=.*)$", re.I)
 
 
-def desired_records(domain: str, primary_host: str, selector: str, dkim_public: str) -> dict:
-    return {
+def desired_records(domain: str, primary_host: str, selector: str, dkim_public: str, bimi_value: str = "") -> dict:
+    records = {
         "MX": {"type": "MX", "name": domain, "content": primary_host, "priority": 10},
         "SPF": {"type": "TXT", "name": domain, "content": f"v=spf1 mx a:{primary_host} ~all"},
         "DKIM": {"type": "TXT", "name": f"{selector}._domainkey.{domain}", "content": f"v=DKIM1; k=rsa; p={dkim_public}"},
         "DMARC": {"type": "TXT", "name": f"_dmarc.{domain}", "content": f"v=DMARC1; p=quarantine; rua=mailto:postmaster@{domain}"},
     }
+    if bimi_value:
+        records["BIMI"] = {"type": "TXT", "name": f"default._bimi.{domain}", "content": bimi_value}
+    return records
 
 
 def spf_allows(value: str, host: str) -> bool:
@@ -97,11 +100,11 @@ def host_plan(host: str, ips: dict, existing: list[dict]) -> list[dict]:
     return out
 
 
-def plan(domain: str, primary_host: str, selector: str, dkim_public: str, existing: list[dict]) -> list[dict]:
+def plan(domain: str, primary_host: str, selector: str, dkim_public: str, existing: list[dict], bimi_value: str = "") -> list[dict]:
     """Returns one entry per mail record:
     {purpose, status: ok|create|update|replace|kept, summary, current[], selected, changes[]}
     `changes` are operations for mailsomadhan-cloudflare apply."""
-    want = desired_records(domain, primary_host, selector, dkim_public)
+    want = desired_records(domain, primary_host, selector, dkim_public, bimi_value=bimi_value)
     domain = domain.lower()
     host = primary_host.lower()
 
@@ -176,6 +179,22 @@ def plan(domain: str, primary_host: str, selector: str, dkim_public: str, existi
                      changes=[{"op": "create", **want["DMARC"]}])
     entry["fresh"] = _fresh(dmarc, want["DMARC"], lambda r: _norm(r["content"]) == _norm(want["DMARC"]["content"]))
     out.append(entry)
+
+    # BIMI (only when configured for this domain)
+    if "BIMI" in want:
+        bimi = [r for r in at("TXT", want["BIMI"]["name"]) if r["content"].lower().startswith("v=bimi1")]
+        entry = {"purpose": "BIMI", "record": want["BIMI"], "current": [r["content"] for r in bimi]}
+        if any(_norm(r["content"]) == _norm(want["BIMI"]["content"]) for r in bimi):
+            entry.update(status="ok", summary="The BIMI record is published.", selected=False, changes=[])
+        elif not bimi:
+            entry.update(status="create", summary="Publish the BIMI logo record for this domain.", selected=True,
+                         changes=[{"op": "create", **want["BIMI"]}])
+        else:
+            entry.update(status="update", summary="Update the BIMI record to match the current logo.", selected=True,
+                         changes=[{"op": "update", "id": bimi[0]["id"], **want["BIMI"]}])
+        entry["fresh"] = _fresh(bimi, want["BIMI"], lambda r: _norm(r["content"]) == _norm(want["BIMI"]["content"]))
+        out.append(entry)
+
     for e in out:
         # "Delete existing and add fresh" is offered when it would change something.
         e["can_replace"] = bool(e["current"]) and bool(e["fresh"])
