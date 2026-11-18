@@ -567,7 +567,7 @@ case "$cmd" in
   set-primary-host)
     host="${1:-}"
     valid_host "$host" || die "invalid hostname"
-    list_hosts | grep -qxF "$host" || die "unknown host: add it in the panel first"
+    list_hosts | grep -xF "$host" >/dev/null || die "unknown host: add it in the panel first"
     dir="$TLS_DIR/$host"
     if [ ! -f "$dir/fullchain.pem" ] || [ ! -f "$dir/privkey.pem" ]; then
       if [ -f "/etc/letsencrypt/live/$host/fullchain.pem" ]; then
@@ -643,7 +643,7 @@ case "$cmd" in
     method="${1:-}"; host="${2:-}"; email="${3:-}"
     [[ "$method" =~ ^(http|dns|cloudflare)$ ]] || die "invalid method"
     valid_host "$host" || die "invalid hostname"
-    list_hosts | grep -qxF "$host" || die "unknown host: add it in the panel first"
+    list_hosts | grep -xF "$host" >/dev/null || die "unknown host: add it in the panel first"
     [ -z "$email" ] || [[ "$email" =~ $EMAIL_RE ]] || die "invalid contact email"
     if [ "$method" = cloudflare ] && [ ! -s "$CF_INI" ]; then die "add a Cloudflare API token first"; fi
     if systemctl is-active -q mailsomadhan-tls 2>/dev/null; then die "another certificate request is running"; fi
@@ -748,7 +748,7 @@ PY
     # cf-host-lookup|cf-host-apply <hostname>: A / AAAA of one of this server's hostnames.
     host="${1:-}"
     valid_host "$host" || die "invalid hostname"
-    [ "$host" = "$MAIL_HOSTNAME" ] || list_hosts | grep -qxF "$host" || die "unknown host: add it in the panel first"
+    [ "$host" = "$MAIL_HOSTNAME" ] || list_hosts | grep -xF "$host" >/dev/null || die "unknown host: add it in the panel first"
     [ -s "$CF_INI" ] || die "connect Cloudflare first"
     exec python3 /usr/local/sbin/mailsomadhan-cloudflare "host-${cmd#cf-host-}" "$host"
     ;;
@@ -760,7 +760,7 @@ PY
     host="${1:-}"
     email="${2:-}"
     valid_host "$host" || die "invalid hostname"
-    list_hosts | grep -qxF "$host" || die "unknown host: add it in the panel first"
+    list_hosts | grep -xF "$host" >/dev/null || die "unknown host: add it in the panel first"
     args=(certonly --webroot -w "$ACME_ROOT" -d "$host" --non-interactive --agree-tos --keep-until-expiring)
     if [ -n "$email" ]; then
       [[ "$email" =~ $EMAIL_RE ]] || die "invalid contact email"
