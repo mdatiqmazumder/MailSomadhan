@@ -15,6 +15,7 @@ from .models import Domain, Mailbox
 from .system import get_setting, run_helper
 
 _usage_cache: tuple[float, dict[str, int]] = (0.0, {})
+_unread_cache: tuple[float, dict[str, int] | None] = (0.0, None)
 
 
 UNLIMITED = 0
@@ -87,3 +88,23 @@ def usage_kb() -> dict[str, int]:
                 usage[parts[0].lower()] = int(parts[3])
     _usage_cache = (time.time(), usage)
     return usage
+
+
+def unread_counts() -> dict[str, int] | None:
+    """Unread (UNSEEN) INBOX message counts per mailbox, from Dovecot. Cached for 30 seconds."""
+    global _unread_cache
+    stamp, data = _unread_cache
+    if time.time() - stamp < 30 and data is not None:
+        return data
+    if settings.dev_mode:
+        return None
+    ok, out = run_helper("unread-counts", timeout=60)
+    if not ok:
+        return data
+    counts: dict[str, int] = {}
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[1].isdigit():
+            counts[parts[0].lower()] = int(parts[1])
+    _unread_cache = (time.time(), counts)
+    return counts

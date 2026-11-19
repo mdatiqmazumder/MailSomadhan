@@ -835,6 +835,11 @@ PY
     doveadm -f tab quota get -A 2>/dev/null | awk -F'\t' 'NR > 1 && $3 == "STORAGE" { print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 }'
     ;;
 
+  unread-counts)
+    # Unread (UNSEEN) INBOX message count per mailbox, for the admin console.
+    (doveadm -f tab mailbox status -A unseen INBOX 2>/dev/null || true) | awk -F'\t' 'NR > 1 && $3 ~ /^[0-9]+$/ { print $1 "\t" $3 }'
+    ;;
+
   sync-milter)
     sync_milter
     echo "milter synchronised"

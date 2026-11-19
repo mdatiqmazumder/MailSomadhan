@@ -19,6 +19,7 @@ type Mailbox = {
   display_name: string;
   quota_mb: number;
   used_kb: number | null;
+  unread_count: number | null;
   active: boolean;
   last_login: string | null;
   can_campaign: boolean;
@@ -132,7 +133,7 @@ export default function MailboxesPage() {
         ) : !visible.length ? (
           <Empty title={data?.length ? "No mailboxes match" : "No mailboxes yet"} />
         ) : (
-          <Table head={["Mailbox", "Storage", "Last sign-in", "Active", ""]}>
+          <Table head={["Mailbox", "Unread", "Storage", "Last sign-in", "Active", ""]}>
             {visible.map((m) => (
               <tr key={m.id}>
                 <td>
@@ -147,6 +148,15 @@ export default function MailboxesPage() {
                       <span className="block truncate text-xs text-muted">{m.email}</span>
                     </span>
                   </Link>
+                </td>
+                <td className="whitespace-nowrap">
+                  {m.unread_count == null ? (
+                    <span className="text-muted">—</span>
+                  ) : m.unread_count > 0 ? (
+                    <Badge tone="accent">{m.unread_count}</Badge>
+                  ) : (
+                    <span className="text-muted">0</span>
+                  )}
                 </td>
                 <td>
                   <UsageBar usedKb={m.used_kb} quotaMb={m.quota_mb} compact />

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import AdminCtx, client_ip, parse_networks, require_admin, require_perm
 from ..models import Admin, Alias, Domain, Host, Mailbox, Relay, Setting
-from ..quota import UNLIMITED, allocated_mb, check_mailbox_quota, fits, gb, max_mailbox_mb, smallest, usage_kb
+from ..quota import UNLIMITED, allocated_mb, check_mailbox_quota, fits, gb, max_mailbox_mb, smallest, unread_counts, usage_kb
 from .cloudflare import publish_dkim
 from ..connection import connection_info, deliver_welcome
 from .profile import avatar_url, clean_forwards, read_upload, remove_avatar, save_avatar
@@ -262,10 +262,11 @@ class MailboxPatch(BaseModel):
     forward_keep: bool | None = None
 
 
-def _mailbox_out(m: Mailbox, usage: dict[str, int] | None = None) -> dict:
+def _mailbox_out(m: Mailbox, usage: dict[str, int] | None = None, unread: dict[str, int] | None = None) -> dict:
     return {
         "id": m.id, "email": m.email, "domain_id": m.domain_id, "display_name": m.display_name,
         "quota_mb": m.quota_mb, "active": m.active, "used_kb": (usage or {}).get(m.email),
+        "unread_count": None if unread is None else unread.get(m.email.lower(), 0),
         "can_campaign": m.can_campaign, "forward_to": m.forward_to, "forward_keep": m.forward_keep,
         "avatar_url": avatar_url(m),
         "last_login": m.last_login.isoformat() if m.last_login else None,
@@ -284,7 +285,8 @@ def list_mailboxes(domain_id: int | None = None, q: str = "", db: Session = Depe
     if q:
         query = query.filter(Mailbox.email.contains(q.strip().lower()))
     usage = usage_kb()
-    return [_mailbox_out(m, usage) for m in query.order_by(Mailbox.email).limit(2000).all()]
+    unread = unread_counts()
+    return [_mailbox_out(m, usage, unread) for m in query.order_by(Mailbox.email).limit(2000).all()]
 
 
 @scoped.post("/mailboxes")
